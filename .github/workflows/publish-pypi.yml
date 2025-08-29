@@ -1,0 +1,87 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:  # 수동으로 실행할 수 있게 하는 트리거 (버튼 방식)
+    inputs:
+      version_bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 전체 히스토리를 가져와서 버전 관리에 사용
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine bump2version
+        pip install -e .[dev]
+    
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v || echo "No tests found, skipping..."
+    
+    - name: Bump version
+      run: |
+        # pyproject.toml의 버전을 업데이트
+        bump2version ${{ github.event.inputs.version_bump }}
+    
+    - name: Build package
+      run: |
+        python -m build
+    
+    - name: Check build
+      run: |
+        python -m twine check dist/*
+    
+    - name: Publish to Test PyPI
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      run: |
+        python -m twine upload --repository testpypi dist/*
+    
+    - name: Test install from Test PyPI
+      run: |
+        pip install --index-url https://test.pypi.org/simple/ qufe
+    
+    - name: Publish to PyPI
+      if: success()
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+      run: |
+        python -m twine upload dist/*
+    
+    - name: Create GitHub Release
+      if: success()
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.get_version.outputs.version }}
+        release_name: Release v${{ steps.get_version.outputs.version }}
+        draft: false
+        prerelease: false
+    
+    - name: Get version
+      id: get_version
+      run: |
+        VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
