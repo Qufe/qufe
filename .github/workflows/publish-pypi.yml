@@ -6,9 +6,10 @@ on:
       version_bump:
         description: 'Version bump type'
         required: true
-        default: 'patch'
+        default: 'none'
         type: choice
         options:
+        - none    # 현재 버전 그대로 배포 (첫 배포용)
         - patch
         - minor
         - major
@@ -51,15 +52,16 @@ jobs:
         echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
 
     - name: Bump version
+      if: github.event.inputs.version_bump != 'none'
       run: |
-        # pyproject.toml의 버전을 업데이트
+        # pyproject.toml의 버전을 업데이트 (none이 아닐 때만)
         bump2version ${{ github.event.inputs.version_bump }}
 
-    - name: Get new version
+    - name: Get version for deployment
       id: get_version
       run: |
-        NEW_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Build package
       run: |
@@ -91,7 +93,7 @@ jobs:
         python -m twine upload dist/*
 
     - name: Commit version bump
-      if: success()
+      if: success() && github.event.inputs.version_bump != 'none'
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
@@ -110,7 +112,6 @@ jobs:
         body: |
           Release version ${{ steps.get_version.outputs.version }}
           
-          Changes in this version:
-          - Version bump: ${{ github.event.inputs.version_bump }}
+          ${{ github.event.inputs.version_bump == 'none' && 'Initial release' || format('Changes in this version: Version bump ({0})', github.event.inputs.version_bump) }}
         draft: false
         prerelease: false
