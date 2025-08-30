@@ -89,6 +89,8 @@ jobs:
         python -m twine upload --repository testpypi dist/*
 
     - name: Test install from Test PyPI
+      env:
+        DISPLAY: :99  # GUI 라이브러리를 위한 디스플레이 환경변수 설정
       run: |
         # 새로운 환경에서 테스트 설치
         pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ qufe==${{ steps.get_version.outputs.version }}
