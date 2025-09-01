@@ -17,6 +17,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 리포지토리에 쓰기 권한
+      packages: write  # 패키지 관련 권한
+      pull-requests: write  # PR 관련 권한 (필요시)
 
     steps:
     - uses: actions/checkout@v4
@@ -113,7 +117,7 @@ jobs:
     - name: Push version changes
       if: success() && github.event.inputs.version_bump != 'none'
       run: |
-        git push origin HEAD:${{ github.ref_name }}
+        git push
 
     - name: Create GitHub Release
       if: success()
