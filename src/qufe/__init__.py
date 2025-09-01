@@ -5,7 +5,7 @@ A collection of utilities for data processing, file handling, database managemen
 automation tasks, and more.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __author__ = "Bongtae Jeon"
 __email__ = "bongtae.jeon@gmail.com"
 

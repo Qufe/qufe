@@ -77,13 +77,54 @@ texthandler.print_dict({'key': ['value1', 'value2']})
 
 ### Database Operations
 
+Before using database operations, you need to configure your PostgreSQL credentials.
+
+#### Option 1: Using .env file (Recommended)
+
+1. Copy the `.env.example` file to `.env` in your project root:
+```bash
+cp .env.example .env
+```
+
+2. Edit the `.env` file with your database credentials:
+```bash
+POSTGRES_USER=your_username
+POSTGRES_PASSWORD=your_password
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=your_database
+```
+
+3. Use the database handler:
 ```python
 from qufe.dbhandler import PostGreSQLHandler
 
-# Connect to PostgreSQL
-db = PostGreSQLHandler('my_database')
-databases = db.get_db_list()
+# Credentials will be loaded automatically from .env file
+db = PostGreSQLHandler()
+databases = db.get_database_list()
 tables = db.get_table_list()
+```
+
+#### Option 2: Using environment variables
+```bash
+export POSTGRES_USER=your_username
+export POSTGRES_PASSWORD=your_password
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=your_database
+```
+
+#### Option 3: Passing credentials directly
+```python
+from qufe.dbhandler import PostGreSQLHandler
+
+db = PostGreSQLHandler(
+    user='your_username',
+    password='your_password',
+    host='localhost',
+    port=5432,
+    db_name='your_database'
+)
 ```
 
 ### Screen Automation
@@ -109,6 +150,21 @@ logs = browser.get_capture()
 browser.quit_driver()
 ```
 
+## Configuration
+
+### Database Configuration
+
+For database operations, qufe supports multiple ways to configure PostgreSQL connections:
+
+1. **`.env` file (Recommended)**: Create a `.env` file in your project root with your database credentials
+2. **Environment variables**: Set environment variables in your system or shell
+3. **Direct parameters**: Pass credentials directly to the constructor
+
+The `.env` file approach is recommended because it:
+- Works consistently across different development environments (Jupyter Lab, PyCharm, terminal, etc.)
+- Keeps credentials separate from code
+- Is easy to manage and doesn't require system-level configuration
+
 ## Requirements
 
 - Python 3.8+
@@ -120,6 +176,7 @@ browser.quit_driver()
 - matplotlib >= 3.3.0
 - pyautogui >= 0.9.50
 - mss >= 6.0.0
+- python-dotenv >= 1.0.0
 
 ## License
 
@@ -132,14 +189,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Security & Ethics
 
 ### Database Configuration
-For security, database credentials should be provided via environment variables:
-```bash
-export POSTGRES_USER=your_username
-export POSTGRES_PASSWORD=your_password
-export POSTGRES_HOST=localhost
-export POSTGRES_PORT=5432
-export POSTGRES_DB=your_database
-```
+For security, database credentials should be stored in a `.env` file or environment variables, never hardcoded in your source code. The `.env` file should be added to your `.gitignore` to prevent accidental commits of sensitive information.
 
 ### Automation Guidelines
 When using screen capture and browser automation features:
