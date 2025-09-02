@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qufe"
-version = "0.3.0"
+version = "0.3.1"
 description = "A comprehensive Python utility library for data processing, file handling, database management, and automation tasks"
 readme = "README.md"
 license = {text = "MIT"}

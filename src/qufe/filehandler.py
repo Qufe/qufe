@@ -504,9 +504,9 @@ class FileHandler:
 
             fh = qfh.FileHandler()
 
-            # Copy all .db files from Synology to local folder
-            source = '/Volumes/Projects'
-            dest = '/Users/qufe/PycharmProjects/jpt/data'
+            # Copy all files with the specified extension from the source folder to the destination folder
+            source = '/source_folder'
+            dest = '/dest_folder/data'
 
             copied, failed, files = fh.copy_files_by_extension(
                 source_dir=source,
@@ -628,14 +628,14 @@ class FileHandler:
         Example:
             tasks = [
                 {
-                    'source_dir': '/Volumes/Projects',
-                    'dest_dir': '/Users/qufe/PycharmProjects/jpt/data/db_files',
+                    'source_dir': '/source_folder_a',
+                    'dest_dir': '/dest_folder/data_a',
                     'extension': '.db',
                     'flatten': True
                 },
                 {
-                    'source_dir': '/Volumes/Projects',
-                    'dest_dir': '/Users/qufe/PycharmProjects/jpt/data/csv_files',
+                    'source_dir': '/source_folder_b',
+                    'dest_dir': '/dest_folder/data_b',
                     'extension': '.csv',
                     'flatten': True
                 }
