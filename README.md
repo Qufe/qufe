@@ -97,10 +97,10 @@ POSTGRES_DB=your_database
 
 3. Use the database handler:
 ```python
-from qufe.dbhandler import PostGreSQLHandler
+from qufe.dbhandler import PostgreSQLHandler
 
 # Credentials will be loaded automatically from .env file
-db = PostGreSQLHandler()
+db = PostgreSQLHandler()
 databases = db.get_database_list()
 tables = db.get_table_list()
 ```
@@ -116,9 +116,9 @@ export POSTGRES_DB=your_database
 
 #### Option 3: Passing credentials directly
 ```python
-from qufe.dbhandler import PostGreSQLHandler
+from qufe.dbhandler import PostgreSQLHandler
 
-db = PostGreSQLHandler(
+db = PostgreSQLHandler(
     user='your_username',
     password='your_password',
     host='localhost',

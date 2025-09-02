@@ -176,7 +176,3 @@ class PostgreSQLHandler:
                 print(f" - {table['schema']}.{table['name']} ({table['type']})")
 
         return tables
-
-
-# Legacy alias for backward compatibility
-PostGreSQLHandler = PostgreSQLHandler

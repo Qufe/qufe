@@ -5,7 +5,7 @@ A collection of utilities for data processing, file handling, database managemen
 automation tasks, and more.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 __author__ = "Bongtae Jeon"
 __email__ = "bongtae.jeon@gmail.com"
 
@@ -22,7 +22,7 @@ from . import wbhandler
 # Commonly used classes and functions
 from .base import TS, diff_codes, import_script, flatten, flatten_gen
 from .filehandler import FileHandler, PathFinder
-from .dbhandler import PostGreSQLHandler
+from .dbhandler import PostgreSQLHandler
 from .texthandler import print_dict, print_in_columns, list_to_doku_wiki_table
 from .excludebracket import eb2, check_eb
 
@@ -41,7 +41,7 @@ __all__ = [
     'TS',
     'FileHandler',
     'PathFinder', 
-    'PostGreSQLHandler',
+    'PostgreSQLHandler',
     
     # Functions
     'diff_codes',

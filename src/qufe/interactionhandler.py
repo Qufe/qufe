@@ -371,13 +371,3 @@ class ProgressUpdater:
             text: New text to display
         """
         self.handle.update(text)
-
-
-# Legacy function aliases for backward compatibility
-get_res = get_resolution
-get_sc = get_screenshot  
-display_img = display_image
-search_diff = find_image_differences
-print_color_code = analyze_color_codes
-click_rnd_in_region = click_random_in_region
-click_rnd_in_position = click_random_in_position

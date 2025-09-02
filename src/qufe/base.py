@@ -253,4 +253,3 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
         result[top_key] = merged
     
     return result
-    return result

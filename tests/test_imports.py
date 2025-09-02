@@ -9,7 +9,7 @@ def test_main_package_import():
     import qufe
     assert hasattr(qufe, '__version__')
     assert hasattr(qufe, '__author__')
-    assert qufe.__version__ == "0.2.1"
+    assert qufe.__version__ == "0.2.2"
 
 
 def test_base_module_import():
@@ -26,7 +26,7 @@ def test_dbhandler_module_import():
     """Test dbhandler module import"""
     try:
         import qufe.dbhandler
-        from qufe.dbhandler import PostGreSQLHandler
+        from qufe.dbhandler import PostgreSQLHandler
         assert True
     except ImportError as e:
         pytest.fail(f"Failed to import dbhandler module: {e}")
@@ -95,7 +95,7 @@ def test_all_imports_from_init():
         from qufe import (
             base, dbhandler, excludebracket, filehandler,
             interactionhandler, pdhandler, texthandler, wbhandler,
-            TS, FileHandler, PathFinder, PostGreSQLHandler,
+            TS, FileHandler, PathFinder, PostgreSQLHandler,
             diff_codes, import_script, flatten, flatten_gen,
             print_dict, print_in_columns, list_to_doku_wiki_table,
             eb2, check_eb

@@ -150,20 +150,20 @@ class TestDependencyHandling:
     def test_database_handler_graceful_failure(self):
         """Test that database handler fails gracefully without DB connection"""
         try:
-            from qufe.dbhandler import PostGreSQLHandler
+            from qufe.dbhandler import PostgreSQLHandler
             
             # This should not crash, even if DB is not available
             # We're not actually connecting, just testing import and instantiation
-            assert PostGreSQLHandler is not None
+            assert PostgreSQLHandler is not None
             
         except ImportError:
-            pytest.skip("PostGreSQLHandler not available")
+            pytest.skip("PostgreSQLHandler not available")
         except Exception as e:
             # Database connection errors are expected in test environment
             if "database" in str(e).lower() or "connection" in str(e).lower():
                 pytest.skip(f"Database not available for testing: {e}")
             else:
-                pytest.fail(f"Unexpected error in PostGreSQLHandler: {e}")
+                pytest.fail(f"Unexpected error in PostgreSQLHandler: {e}")
     
     def test_selenium_handler_graceful_failure(self):
         """Test that selenium handler fails gracefully without browser"""
