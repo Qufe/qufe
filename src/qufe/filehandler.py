@@ -474,6 +474,226 @@ class FileHandler:
             candidate = base_dir / f"{base_name}_{counter}{extension}"
         return candidate
 
+    @staticmethod
+    def copy_files_by_extension(
+            source_dir: str,
+            dest_dir: str,
+            extension: str,
+            flatten: bool = True,
+            preserve_structure: bool = False,
+            verbose: bool = True) -> tuple:
+        """
+        Copy all files with specific extension from source directory to destination.
+
+        Args:
+            source_dir (str): Source directory path to search files
+            dest_dir (str): Destination directory path to copy files
+            extension (str): File extension to search (e.g., '.db', 'db', '*.db')
+            flatten (bool): If True, copy all files to dest_dir root without subdirectories
+            preserve_structure (bool): If True, preserve source directory structure in destination
+            verbose (bool): If True, print copy progress
+
+        Returns:
+            tuple: (copied_count, failed_files, copied_files)
+                - copied_count (int): Number of successfully copied files
+                - failed_files (list): List of tuples (source_path, error_message) for failed copies
+                - copied_files (list): List of tuples (source_path, dest_path) for successful copies
+
+        Example:
+            from qufe import filehandler as qfh
+
+            fh = qfh.FileHandler()
+
+            # Copy all .db files from Synology to local folder
+            source = '/Volumes/Projects'
+            dest = '/Users/qufe/PycharmProjects/jpt/data'
+
+            copied, failed, files = fh.copy_files_by_extension(
+                source_dir=source,
+                dest_dir=dest,
+                extension='.db',
+                flatten=True
+            )
+
+            print(f"Successfully copied: {copied} files")
+            if failed:
+                print(f"Failed to copy: {len(failed)} files")
+        """
+        from pathlib import Path
+        import shutil
+
+        # Normalize extension format
+        if not extension.startswith('.'):
+            extension = f'.{extension}'
+        if extension.startswith('*.'):
+            extension = extension[1:]
+
+        # Convert to Path objects
+        source_path = Path(source_dir)
+        dest_path = Path(dest_dir)
+
+        # Validate source directory
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
+
+        # Create destination directory
+        dest_path.mkdir(parents=True, exist_ok=True)
+
+        # Initialize counters and lists
+        copied_count = 0
+        failed_files = []
+        copied_files = []
+
+        # Search pattern for files
+        pattern = f'*{extension}'
+
+        # Find all matching files recursively
+        for source_file in source_path.rglob(pattern):
+            try:
+                if flatten:
+                    # Copy to destination root with unique filename
+                    dest_file_path = dest_path / source_file.name
+                    dest_file_path = FileHandler._get_unique_path(dest_file_path)
+                elif preserve_structure:
+                    # Preserve relative directory structure
+                    relative_path = source_file.relative_to(source_path)
+                    dest_file_path = dest_path / relative_path
+                    dest_file_path.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    # Default: flatten structure
+                    dest_file_path = dest_path / source_file.name
+                    dest_file_path = FileHandler._get_unique_path(dest_file_path)
+
+                # Copy file
+                shutil.copy2(source_file, dest_file_path)
+
+                copied_count += 1
+                copied_files.append((str(source_file), str(dest_file_path)))
+
+                if verbose:
+                    print(f"복사 완료: {source_file.name} -> {dest_file_path}")
+
+            except Exception as e:
+                failed_files.append((str(source_file), str(e)))
+                if verbose:
+                    print(f"복사 실패: {source_file.name} - 오류: {e}")
+
+        if verbose:
+            print(f"\n총 {copied_count}개의 {extension} 파일이 복사되었습니다.")
+            if failed_files:
+                print(f"{len(failed_files)}개의 파일 복사에 실패했습니다.")
+
+        return copied_count, failed_files, copied_files
+
+
+    @staticmethod
+    def _get_unique_path(file_path: Path) -> Path:
+        """
+        Generate unique file path by adding suffix if file already exists.
+
+        Args:
+            file_path (Path): Original file path
+
+        Returns:
+            Path: Unique file path
+        """
+        if not file_path.exists():
+            return file_path
+
+        stem = file_path.stem
+        suffix = file_path.suffix
+        parent = file_path.parent
+
+        counter = 1
+        while True:
+            new_path = parent / f"{stem}_{counter}{suffix}"
+            if not new_path.exists():
+                return new_path
+            counter += 1
+
+
+    @staticmethod
+    def batch_copy_files(copy_tasks: list, verbose: bool = True) -> dict:
+        """
+        Execute multiple file copy tasks with different extensions or directories.
+
+        Args:
+            copy_tasks (list): List of dictionaries with copy task parameters
+                Each dict should have: source_dir, dest_dir, extension, and optional flatten/preserve_structure
+            verbose (bool): If True, print progress for each task
+
+        Returns:
+            dict: Results for each task with statistics
+
+        Example:
+            tasks = [
+                {
+                    'source_dir': '/Volumes/Projects',
+                    'dest_dir': '/Users/qufe/PycharmProjects/jpt/data/db_files',
+                    'extension': '.db',
+                    'flatten': True
+                },
+                {
+                    'source_dir': '/Volumes/Projects',
+                    'dest_dir': '/Users/qufe/PycharmProjects/jpt/data/csv_files',
+                    'extension': '.csv',
+                    'flatten': True
+                }
+            ]
+
+            results = FileHandler.batch_copy_files(tasks)
+
+            for i, task in enumerate(tasks):
+                print(f"Task {i+1}: Copied {results[i]['copied_count']} {task['extension']} files")
+        """
+        results = {}
+
+        for i, task in enumerate(copy_tasks):
+            if verbose:
+                print(f"\n작업 {i+1}/{len(copy_tasks)} 시작:")
+                print(f"  소스: {task['source_dir']}")
+                print(f"  대상: {task['dest_dir']}")
+                print(f"  확장자: {task['extension']}")
+                print("-" * 50)
+
+            # Extract parameters with defaults
+            source_dir = task['source_dir']
+            dest_dir = task['dest_dir']
+            extension = task['extension']
+            flatten = task.get('flatten', True)
+            preserve_structure = task.get('preserve_structure', False)
+
+            # Execute copy task
+            copied, failed, files = FileHandler.copy_files_by_extension(
+                source_dir=source_dir,
+                dest_dir=dest_dir,
+                extension=extension,
+                flatten=flatten,
+                preserve_structure=preserve_structure,
+                verbose=verbose
+            )
+
+            # Store results
+            results[i] = {
+                'task': task,
+                'copied_count': copied,
+                'failed_files': failed,
+                'copied_files': files,
+                'success_rate': copied / (copied + len(failed)) * 100 if (copied + len(failed)) > 0 else 0
+            }
+
+        if verbose:
+            print("\n" + "=" * 50)
+            print("전체 작업 요약:")
+            total_copied = sum(r['copied_count'] for r in results.values())
+            total_failed = sum(len(r['failed_files']) for r in results.values())
+            print(f"  총 복사된 파일: {total_copied}개")
+            print(f"  총 실패한 파일: {total_failed}개")
+            if (total_copied + total_failed) > 0:
+                print(f"  전체 성공률: {total_copied / (total_copied + total_failed) * 100:.1f}%")
+
+        return results
+
 
 class PathFinder:
     """
