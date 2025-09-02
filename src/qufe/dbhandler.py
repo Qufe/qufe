@@ -30,12 +30,13 @@ class PostgreSQLHandler:
     environment variables as fallback.
     """
 
-    def __init__(self,
-                 db_name: Optional[str] = None,
-                 user: Optional[str] = None,
-                 password: Optional[str] = None,
-                 host: Optional[str] = None,
-                 port: Optional[int] = None):
+    def __init__(
+            self,
+            db_name: Optional[str] = None,
+            user: Optional[str] = None,
+            password: Optional[str] = None,
+            host: Optional[str] = None,
+            port: Optional[int] = None):
         """
         Initialize PostgreSQL connection handler.
 
