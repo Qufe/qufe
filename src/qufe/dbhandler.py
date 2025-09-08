@@ -3,19 +3,93 @@ PostgreSQL database handler for easy connection management and queries.
 
 This module provides a simple interface for connecting to PostgreSQL databases
 and executing queries using SQLAlchemy.
+
+Required dependencies:
+    pip install qufe[database]
+
+This installs: sqlalchemy>=1.3.0, python-dotenv>=0.15.0
 """
 
 import os
 from typing import List, Dict, Optional
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    # python-dotenv is not available, continue with system environment variables
-    pass
+
+# Lazy imports for external dependencies
+def _import_sqlalchemy():
+    """Lazy import SQLAlchemy with helpful error message."""
+    try:
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.engine import Engine
+        return create_engine, text, Engine
+    except ImportError as e:
+        raise ImportError(
+            "Database functionality requires SQLAlchemy. "
+            "Install with: pip install qufe[database]"
+        ) from e
+
+
+def _import_dotenv():
+    """Lazy import python-dotenv with graceful fallback."""
+    try:
+        from dotenv import load_dotenv
+        return load_dotenv
+    except ImportError:
+        # Graceful degradation: continue without dotenv support
+        return None
+
+
+def help():
+    """
+    Display help information for database handler functionality.
+
+    Shows installation instructions, usage examples, and configuration options.
+    """
+    print("qufe.dbhandler - PostgreSQL Database Handler")
+    print("=" * 45)
+    print()
+
+    try:
+        _import_sqlalchemy()
+        print("✓ Dependencies: INSTALLED")
+    except ImportError:
+        print("✗ Dependencies: MISSING")
+        print("  Install with: pip install qufe[database]")
+        print("  This installs: sqlalchemy>=1.3.0, python-dotenv>=0.15.0")
+        print()
+        return
+
+    print()
+    print("FEATURES:")
+    print("  • PostgreSQL connection management with SQLAlchemy")
+    print("  • Automatic environment variable loading (.env support)")
+    print("  • Database and table exploration utilities")
+    print("  • Connection pooling and cleanup")
+    print()
+
+    print("CONFIGURATION OPTIONS:")
+    print("  1. .env file (recommended):")
+    print("     POSTGRES_USER=username")
+    print("     POSTGRES_PASSWORD=password")
+    print("     POSTGRES_HOST=localhost")
+    print("     POSTGRES_PORT=5432")
+    print("     POSTGRES_DB=database_name")
+    print()
+
+    print("  2. Environment variables:")
+    print("     export POSTGRES_USER=username")
+    print("     # ... other variables")
+    print()
+
+    print("  3. Direct parameters:")
+    print("     db = PostgreSQLHandler(user='...', password='...')")
+    print()
+
+    print("USAGE EXAMPLE:")
+    print("  from qufe.dbhandler import PostgreSQLHandler")
+    print("  db = PostgreSQLHandler()  # Uses .env or environment variables")
+    print("  databases = db.get_database_list()")
+    print("  tables = db.get_table_list()")
+    print("  results = db.execute_query('SELECT * FROM users LIMIT 5')")
 
 
 class PostgreSQLHandler:
@@ -48,8 +122,18 @@ class PostgreSQLHandler:
             port: Port number (defaults to POSTGRES_PORT env var or 5432)
 
         Raises:
+            ImportError: If required dependencies are not installed
             ValueError: If username or password is not provided
         """
+        # Import required dependencies
+        self._create_engine, self._text, self._Engine = _import_sqlalchemy()
+
+        # Try to load .env file if dotenv is available
+        load_dotenv = _import_dotenv()
+        if load_dotenv:
+            load_dotenv()
+
+        # Set connection parameters with environment variable fallback
         self.user = user or os.getenv('POSTGRES_USER')
         self.password = password or os.getenv('POSTGRES_PASSWORD')
         self.host = host or os.getenv('POSTGRES_HOST', 'localhost')
@@ -63,8 +147,9 @@ class PostgreSQLHandler:
                 "in a .env file or provide them as parameters."
             )
 
+        # Create database connection URL
         url = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
-        self.engine: Engine = create_engine(url, echo=False, future=True)
+        self.engine = self._create_engine(url, echo=False, future=True)
 
     def get_connection_url(self, db_name: Optional[str] = None) -> str:
         """
@@ -103,7 +188,7 @@ class PostgreSQLHandler:
             >>> results = handler.execute_query("SELECT * FROM users LIMIT 5")
         """
         with self.engine.connect() as conn:
-            return conn.execute(text(sql)).fetchall()
+            return conn.execute(self._text(sql)).fetchall()
 
     def get_database_list(self, print_result: bool = False) -> List[str]:
         """
