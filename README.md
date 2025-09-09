@@ -4,19 +4,6 @@ A comprehensive Python utility library for data processing, file handling, datab
 
 Born from the need to streamline repetitive tasks in Jupyter Lab environments, qufe addresses common pain points encountered during interactive development and data exploration work.
 
-**NEW in v0.4.0**: Modular architecture with optional dependencies - install only what you need!
-
-## Python Version Requirement
-
-**Important**: qufe requires **Python 3.10 or higher**.
-
-This requirement exists because qufe uses modern Python features for better performance and code clarity:
-- **zoneinfo module** (Python 3.9+): Standard library timezone support
-- **Structural pattern matching** (Python 3.10+): match-case statements for cleaner logic
-- **Union type operator** (Python 3.10+): `int | float` syntax for improved type hints
-
-We made this decision to leverage modern Python capabilities that enhance the library's functionality and maintainability.
-
 ## Installation
 
 ### Quick Start (Core Features Only)
@@ -136,10 +123,6 @@ root, dirs, files = pf.get_one_depth()
 ```
 
 ### 3. Database Operations (Optional)
-```bash
-# Install database support first
-pip install qufe[database]
-```
 
 #### Configuration Options
 
@@ -183,28 +166,33 @@ results = db.execute_query("SELECT * FROM users LIMIT 5")
 ```
 
 ### 4. Data Processing (Optional)
-```bash
-pip install qufe[data]
-```
-
 ```python
-from qufe.pdhandler import show_col_names, show_all_na
+from qufe.pdhandler import PandasHandler
 import pandas as pd
+
+# Initialize handler with default settings
+handler = PandasHandler()
+
+# Or with default exclude columns for NA/empty checks
+handler = PandasHandler(default_exclude_cols=['id', 'created_at'])
 
 # Compare DataFrames
 df1 = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
 df2 = pd.DataFrame({'B': [5, 6], 'C': [7, 8]})
-col_dict, comparison = show_col_names([df1, df2])
+col_dict, comparison = handler.show_col_names([df1, df2])
 
 # Find missing data
-na_subset = show_all_na(df1)
+na_subset = handler.show_all_na(df1)
+
+# Find problematic rows (uses default_exclude_cols if set)
+problem_rows = handler.show_all_na_or_empty_rows(df1)
+
+# Convert lists to tuples in DataFrame
+df_with_lists = pd.DataFrame({'col1': [[1, 2], [3, 4]], 'col2': ['a', 'b']})
+df_converted = handler.convert_list_to_tuple_in_df(df_with_lists)
 ```
 
 ### 5. Web Automation (Optional)
-```bash
-pip install qufe[web]
-```
-
 ```python
 from qufe.wbhandler import Firefox
 
@@ -222,10 +210,6 @@ browser.quit_driver()
 ```
 
 ### 6. Screen Automation (Optional)
-```bash
-pip install qufe[vision]
-```
-
 ```python
 from qufe.interactionhandler import get_screenshot, display_image, get_color_boxes
 
@@ -287,21 +271,6 @@ The `.env` approach is recommended because it:
 Browser automation requires WebDriver installation:
 - **Firefox**: Usually works out of the box (GeckoDriver auto-download)
 
-## Migration from v0.3.0
-
-If upgrading from previous versions:
-
-1. **Check for import errors**:
-   ```python
-   import qufe
-   qufe.help()  # See what's missing
-   ```
-
-2. **Install specific features**:
-   ```bash
-   pip install qufe[database,data]  # Only what you need
-   ```
-
 ## Documentation
 - **Online docs**: https://qufe.readthedocs.io
 - **Local help**: Use `help()` functions in each module
@@ -359,18 +328,3 @@ help()  # Shows WebDriver requirements
 1. **Check module help**: Call `help()` on any module
 2. **GitHub Issues**: https://github.com/qufe/qufe/issues
 3. **Documentation**: https://qufe.readthedocs.io
-
-## Changelog
-
-### v0.4.0 (Current)
-- **Breaking Change**: Moved to optional dependencies architecture
-- **Breaking Change**: Python 3.10+ requirement
-- Added modular installation with feature groups
-- Enhanced error messages with installation guidance  
-- Added comprehensive help() functions
-- Improved graceful degradation when dependencies missing
-
-### v0.3.1 (Previous)
-- All dependencies were required
-- Python 3.8+ support
-- Monolithic installation
