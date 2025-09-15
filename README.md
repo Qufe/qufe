@@ -244,7 +244,7 @@ interactionhandler.help()  # Screen interaction guide
 |---------------|--------------|---------|
 | `database` | sqlalchemy≥1.3.0, python-dotenv≥0.15.0 | PostgreSQL operations |
 | `data` | pandas≥1.1.0, numpy≥1.17.0 | Data processing |
-| `web` | selenium≥3.141.0 | Browser automation |
+| `web` | selenium≥4.0.0 | Browser automation |
 | `vision` | opencv-python≥4.1.0, matplotlib≥3.1.0, pyautogui≥0.9.48, mss≥4.0.0 | Screen interaction |
 | `jupyter` | ipython≥6.0.0 | Notebook integration |
 
@@ -308,9 +308,6 @@ These are personal choices, but we believe technology works best when used respo
 # Check what's available
 import qufe
 qufe.check_dependencies()
-
-# Install missing features
-pip install qufe[database]  # or other feature groups
 ```
 
 **Database connection issues:**
