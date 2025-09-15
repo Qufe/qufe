@@ -9,7 +9,7 @@ def test_main_package_import():
     import qufe
     assert hasattr(qufe, '__version__')
     assert hasattr(qufe, '__author__')
-    assert qufe.__version__ == "0.5.0"
+    assert qufe.__version__ == "0.5.1"
 
 
 def test_base_module_import():

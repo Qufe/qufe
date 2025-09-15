@@ -69,7 +69,7 @@ pip install qufe[vision]
 - **Data validation**: Comprehensive quality checks
 
 #### Web Automation (`qufe.wbhandler`) - *[web]*
-- **SeleniumBase integration**: Enhanced browser automation
+- **Selenium-based browser automation**: Direct Selenium WebDriver integration
 - **Network monitoring**: Capture fetch/XHR requests
 - **Element discovery**: Interactive element finding utilities  
 - **URL parsing**: Extract and manipulate URL parameters
@@ -198,7 +198,7 @@ from qufe.wbhandler import Firefox
 
 # Start browser
 browser = Firefox(private_mode=True)
-browser.sb.open('https://example.com')
+browser.driver.get('https://example.com')
 
 # Network monitoring
 browser.inject_network_capture()
@@ -244,7 +244,7 @@ interactionhandler.help()  # Screen interaction guide
 |---------------|--------------|---------|
 | `database` | sqlalchemy≥1.3.0, python-dotenv≥0.15.0 | PostgreSQL operations |
 | `data` | pandas≥1.1.0, numpy≥1.17.0 | Data processing |
-| `web` | seleniumbase≥3.0.0, selenium≥3.141.0 | Browser automation |
+| `web` | selenium≥3.141.0 | Browser automation |
 | `vision` | opencv-python≥4.1.0, matplotlib≥3.1.0, pyautogui≥0.9.48, mss≥4.0.0 | Screen interaction |
 | `jupyter` | ipython≥6.0.0 | Notebook integration |
 
@@ -268,8 +268,12 @@ The `.env` approach is recommended because it:
 
 ### Web Automation Setup
 
-Browser automation requires WebDriver installation:
-- **Firefox**: Usually works out of the box (GeckoDriver auto-download)
+Browser automation requires modern Selenium WebDriver:
+- **Requirements**: Selenium 4.0+ for enhanced tab management and modern WebDriver features
+- **WebDriver Installation**: 
+  - Chrome: ChromeDriver (auto-managed by Selenium 4.0+)
+  - Firefox: GeckoDriver (auto-managed by Selenium 4.0+)
+- **Security**: Runs in secure mode by default; insecure mode available for testing only
 
 ## Documentation
 - **Online docs**: https://qufe.readthedocs.io

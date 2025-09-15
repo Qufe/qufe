@@ -46,7 +46,7 @@ Features
    - Color code extraction from screen regions
 
 **Web Browser Automation** (:mod:`qufe.wbhandler`)
-   - SeleniumBase integration with custom timeouts
+   - Selenium WebDriver integration with custom timeouts
    - Network request monitoring and capture
    - Interactive element discovery
    - URL parsing and parameter extraction

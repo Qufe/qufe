@@ -17,7 +17,7 @@ Install only the features you need:
 For detailed installation and usage instructions, see: https://qufe.readthedocs.io
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __author__ = "Bongtae Jeon"
 __email__ = "bongtae.jeon@gmail.com"
 
@@ -143,7 +143,7 @@ def help():
 
     if _available_modules['wbhandler']:
         print("WEB AUTOMATION:")
-        print("  • SeleniumBase browser automation")
+        print("  • Selenium WebDriver browser automation")
         print("  • Network request monitoring and capture")
         print()
 
