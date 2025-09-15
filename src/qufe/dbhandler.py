@@ -219,7 +219,7 @@ class PostgreSQLHandler:
 
         return database_names
 
-    def get_table_list(self, print_result: bool = False) -> List[Dict[str, str]]:
+    def get_table_list(self, print_result: bool = True) -> List[Dict[str, str]]:
         """
         Get list of all tables and views in the current database.
 
@@ -257,8 +257,12 @@ class PostgreSQLHandler:
         ]
 
         if print_result:
-            print(f"\n=== Database: {self.database} - Tables and Views ===")
-            for table in tables:
-                print(f" - {table['schema']}.{table['name']} ({table['type']})")
+            public_tables = [
+                name for table in tables 
+                if (table.get('schema', '') == 'public') and (name := table.get('name', '').strip())
+            ]
+            if public_tables:
+                print(f"\n=== Database: {self.database} - Tables(public) ===")
+                print(public_tables)
 
         return tables
