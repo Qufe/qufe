@@ -29,7 +29,7 @@ def _import_selenium_dependencies():
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support.ui import WebDriverWait, Select
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.action_chains import ActionChains
         from selenium.webdriver.firefox.options import Options as FirefoxOptions
@@ -37,7 +37,8 @@ def _import_selenium_dependencies():
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         from selenium.webdriver.chrome.service import Service as ChromeService
         from selenium.common.exceptions import (
-            WebDriverException, TimeoutException, NoSuchElementException
+            WebDriverException, TimeoutException, NoSuchElementException,
+            StaleElementReferenceException, ElementNotInteractableException
         )
 
         return {
@@ -50,9 +51,12 @@ def _import_selenium_dependencies():
             'FirefoxService': FirefoxService,
             'ChromeOptions': ChromeOptions,
             'ChromeService': ChromeService,
+            'Select': Select,
             'WebDriverException': WebDriverException,
             'TimeoutException': TimeoutException,
             'NoSuchElementException': NoSuchElementException,
+            'StaleElementReferenceException': StaleElementReferenceException,
+            'ElementNotInteractableException': ElementNotInteractableException,
         }
     except ImportError as e:
         raise ImportError(
@@ -63,7 +67,7 @@ def _import_selenium_dependencies():
 
 class TimeoutConfig:
     """Custom timeout configuration to replace SeleniumBase settings."""
-    
+
     MINI_TIMEOUT = 5         # Default 2s → 5s
     SMALL_TIMEOUT = 20       # Default 7s → 20s
     LARGE_TIMEOUT = 40       # Default 10s → 40s
@@ -100,10 +104,17 @@ def help():
     print()
 
     print("FEATURES:")
+    print("  • Gradual element finding with automatic fallback")
     print("  • Network request monitoring via JavaScript injection")
     print("  • Interactive element discovery and automation")
     print("  • URL parameter extraction and parsing")
     print("  • Timeout-based page loading for compatibility")
+    print()
+
+    print("ELEMENT FINDING:")
+    print("  • .find_element() - Fast direct find with gradual fallback")
+    print("  • .wait_for_element() - Explicit wait for dynamic content")
+    print("  • .select_option_by_text() - Dropdown selection with retry logic")
     print()
 
     print("SELECTOR SHORTCUTS:")
@@ -126,10 +137,6 @@ def help():
     print("  • browser.wait_for_network_idle()  # Wait for network activity to settle")
     print()
 
-    print("SECURITY CONFIGURATION:")
-    print("  • Default: Secure mode with standard security features enabled")
-    print()
-
     print("USAGE EXAMPLE:")
     print("  from qufe.wbhandler import Chrome")
     print("  ")
@@ -149,6 +156,9 @@ def help():
     print("  browser.click('//button[text()=\"Login\"]')  # XPath")
     print("  browser.type_text('$#username', 'user')      # CSS ID")
     print("  browser.click('$ .submit-btn')               # CSS Class")
+    print("  ")
+    print("  # Element finding")
+    print("  browser.select_option_by_text('#country', 'Korea')  # Dropdown")
     print("  ")
     print("  # Clean up")
     print("  browser.quit()")
@@ -171,12 +181,12 @@ class Browser:
     """
 
     def __init__(
-        self,
-        private_mode: bool = True,
-        mobile_mode: bool = False,
-        headless: bool = False,
-        window_size: str = "1920,1080",
-        window_position: str = "10,10"
+            self,
+            private_mode: bool = True,
+            mobile_mode: bool = False,
+            headless: bool = False,
+            window_size: str = "1920,1080",
+            window_position: str = "10,10"
     ):
         """
         Initialize browser instance.
@@ -199,13 +209,13 @@ class Browser:
         self._headless = headless
         self._window_size = window_size
         self._window_position = window_position
-        
+
         # Initialize driver and tab management
         self.driver = None
         self.wait = None
         self.window_handles = []
         self._init_webdriver()
-        
+
         # Configure timeouts
         self._configure_timeouts()
 
@@ -219,40 +229,35 @@ class Browser:
             self.driver.implicitly_wait(TimeoutConfig.MINI_TIMEOUT)
             self.driver.set_page_load_timeout(TimeoutConfig.PAGE_LOAD_TIMEOUT)
             self.wait = self.selenium['WebDriverWait'](self.driver, TimeoutConfig.SMALL_TIMEOUT)
-            
+
             # Initialize window handles list
             try:
                 self.window_handles = [self.driver.current_window_handle]
             except self.selenium['WebDriverException']:
                 self.window_handles = []
 
-    def _validate_driver(self) -> None:
-        """Validate that driver is initialized. Fail-fast approach."""
-        if self.driver is None:
-            raise RuntimeError("Driver not initialized")
-
     def _parse_selector(self, selector: str, by: Optional[str] = None) -> tuple:
         """
         Parse selector and determine the appropriate By strategy.
-        
+
         Auto-detects selector type based on SeleniumBase conventions:
         - Starts with '//' → XPath
         - Starts with '$' → CSS Selector
         - Otherwise → Use explicit 'by' parameter or default to CSS
-        
+
         Args:
             selector: The selector string
             by: Explicit selector type ('css', 'xpath', or None for auto-detect)
-            
+
         Returns:
             Tuple of (By strategy, cleaned selector)
-            
+
         Raises:
-            ValueError: If by parameter is invalid
+            ValueError: If selector is empty or by parameter is invalid
         """
         if not selector:
             raise ValueError("Selector cannot be empty")
-            
+
         # Auto-detect based on selector prefix
         if selector.startswith('//'):
             return (self.selenium['By'].XPATH, selector)
@@ -260,11 +265,11 @@ class Browser:
             # Remove $ prefix and handle space after $ for class selectors
             cleaned_selector = selector[1:].lstrip()
             return (self.selenium['By'].CSS_SELECTOR, cleaned_selector)
-        
+
         # Fall back to explicit 'by' parameter
         if by is None:
             by = "css"  # Default to CSS
-            
+
         if by.lower() == "css":
             return (self.selenium['By'].CSS_SELECTOR, selector)
         elif by.lower() == "xpath":
@@ -273,12 +278,12 @@ class Browser:
             raise ValueError("by parameter must be 'css' or 'xpath'")
 
     def open(
-        self, 
-        url: str, 
-        safe_timeout: bool = False, 
-        timeout: Optional[int] = None,
-        wait_for_idle: bool = False, 
-        idle_time: float = 2.0
+            self,
+            url: str,
+            safe_timeout: bool = False,
+            timeout: Optional[int] = None,
+            wait_for_idle: bool = False,
+            idle_time: float = 2.0
     ) -> None:
         """
         Navigate to the specified URL with enhanced timeout handling.
@@ -310,28 +315,27 @@ class Browser:
         try:
             # Set temporary timeout
             self.driver.set_page_load_timeout(load_timeout)
-            
+
             # Navigate to URL
             self.driver.get(url)
-            
+
         except self.selenium['TimeoutException'] as e:
             # Check if page is partially loaded and usable
             try:
                 ready_state = self.driver.execute_script("return document.readyState")
                 current_url = self.driver.current_url
-                
+
                 if (ready_state in ['interactive', 'complete']) and (current_url != 'data:,'):
                     print(f"Page partially loaded but continuing (ready state: {ready_state})")
-                    print("This may be due to blocked resources")
                 else:
                     raise RuntimeError(f"Page failed to load properly: {e}")
-                    
+
             except Exception:
                 raise RuntimeError(f"Page loading failed and unable to check status: {e}")
-                
+
         except Exception as e:
             raise RuntimeError(f"Unexpected error during page loading: {e}")
-            
+
         finally:
             # Restore original timeout
             try:
@@ -347,7 +351,7 @@ class Browser:
     def wait_for_network_idle(self, idle_time: float = 2.0, timeout: int = 30) -> bool:
         """
         Wait for network activity to settle by monitoring JavaScript activity.
-        
+
         This method checks for jQuery activity and document ready state,
         then waits for a period of network inactivity.
 
@@ -358,61 +362,115 @@ class Browser:
         Returns:
             True if network became idle within timeout, False otherwise
         """
-        self._validate_driver()
-        
+        if not self.driver:
+            return False
+
         end_time = time.time() + timeout
-        
+
         try:
             # First wait for basic document ready state
             self.wait_for_ready_state_complete(timeout=min(10, timeout))
-            
+
             # Then wait for jQuery if present
             if time.time() < end_time:
                 remaining_timeout = int(end_time - time.time())
                 self.wait_for_ajax(timeout=min(remaining_timeout, 10))
-            
+
             # Finally wait for idle period
             last_activity_time = time.time()
-            
+
             while time.time() < end_time:
                 current_time = time.time()
-                
+
                 # Check if we've been idle long enough
                 if (current_time - last_activity_time) >= idle_time:
                     return True
-                
+
                 # Check for ongoing network activity (simplified check)
                 try:
                     # Check if any new script tags or resources are being added
                     script_count = self.driver.execute_script(
                         "return document.getElementsByTagName('script').length"
                     )
-                    
+
                     # Simple heuristic: if script count changes, reset idle timer
                     if not hasattr(self, '_last_script_count'):
                         self._last_script_count = script_count
                     elif script_count != self._last_script_count:
                         last_activity_time = current_time
                         self._last_script_count = script_count
-                    
+
                 except Exception:
                     # If we can't check, assume activity has stopped
                     pass
-                
+
                 time.sleep(0.5)  # Check every 500ms
-            
+
             return False  # Timeout reached
-            
+
         except Exception:
             return False
 
-    def find_element(self, selector: str, by: Optional[str] = None):
+    def wait_for_element(
+            self,
+            selector: str,
+            by: Optional[str] = None,
+            timeout: Optional[int] = None,
+            condition: str = 'visibility'
+    ):
         """
-        Find a single element using auto-detected or explicit selector type.
+        Wait for element to be present and meet the specified condition.
 
         Args:
             selector: Element selector (auto-detects XPath: //, CSS: $)
             by: Explicit selection method ('css' or 'xpath', optional)
+            timeout: Custom timeout in seconds
+            condition: Wait condition ('visibility', 'presence', 'clickable')
+
+        Returns:
+            WebElement when found
+
+        Raises:
+            TimeoutException: If element not found within timeout
+            ValueError: If invalid condition specified
+        """
+        wait_timeout = timeout or TimeoutConfig.SMALL_TIMEOUT
+        wait = self.selenium['WebDriverWait'](self.driver, wait_timeout)
+
+        (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
+        locator = (by_strategy, cleaned_selector)
+
+        # Select appropriate expected condition
+        if condition == 'visibility':
+            wait_condition = self.selenium['EC'].visibility_of_element_located(locator)
+        elif condition == 'presence':
+            wait_condition = self.selenium['EC'].presence_of_element_located(locator)
+        elif condition == 'clickable':
+            wait_condition = self.selenium['EC'].element_to_be_clickable(locator)
+        else:
+            raise ValueError(f"Invalid condition: {condition}. Must be 'visibility', 'presence', or 'clickable'")
+
+        return wait.until(wait_condition)
+
+    def find_element(
+            self,
+            selector: str,
+            by: Optional[str] = None,
+            wait_if_needed: bool = True,
+            timeout: int = 10
+    ):
+        """
+        Find a single element with gradual approach.
+
+        Implements fail-fast + gradual fallback pattern:
+        1. Try immediate find (fast path for static content)
+        2. If not found and wait_if_needed=True, wait for element (safe path for dynamic content)
+
+        Args:
+            selector: Element selector (auto-detects XPath: //, CSS: $)
+            by: Explicit selection method ('css' or 'xpath', optional)
+            wait_if_needed: Enable gradual fallback with waiting
+            timeout: Timeout for waiting phase
 
         Returns:
             WebElement if found
@@ -422,7 +480,21 @@ class Browser:
             ValueError: If selector is invalid
         """
         (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
-        return self.driver.find_element(by_strategy, cleaned_selector)
+
+        try:
+            # Fast path: immediate find for static content
+            return self.driver.find_element(by_strategy, cleaned_selector)
+        except self.selenium['NoSuchElementException']:
+            if wait_if_needed:
+                # Fallback: use wait_for_element for dynamic content
+                try:
+                    return self.wait_for_element(selector, by, timeout, condition='presence')
+                except self.selenium['TimeoutException']:
+                    raise self.selenium['NoSuchElementException'](
+                        f"Element not found after waiting {timeout}s: {selector}"
+                    )
+            else:
+                raise
 
     def find_elements(self, selector: str, by: Optional[str] = None):
         """
@@ -438,25 +510,59 @@ class Browser:
         (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
         return self.driver.find_elements(by_strategy, cleaned_selector)
 
-    def wait_for_element(self, selector: str, by: Optional[str] = None, timeout: Optional[int] = None):
+    def select_option_by_text(
+            self,
+            dropdown_selector: str,
+            option_text: str,
+            by: Optional[str] = None,
+            max_retries: int = 2,
+            retry_delay: float = 0.5
+    ) -> None:
         """
-        Wait for element to be present and visible.
+        Select dropdown option by visible text with retry logic.
 
         Args:
-            selector: Element selector (auto-detects XPath: //, CSS: $)
+            dropdown_selector: Selector for the <select> element
+            option_text: Visible text of the option to select
             by: Explicit selection method ('css' or 'xpath', optional)
-            timeout: Custom timeout in seconds
+            max_retries: Maximum number of retry attempts
+            retry_delay: Delay between retries in seconds
 
-        Returns:
-            WebElement when found
+        Raises:
+            RuntimeError: If selection fails after all retries
         """
-        wait_timeout = timeout or TimeoutConfig.SMALL_TIMEOUT
-        wait = self.selenium['WebDriverWait'](self.driver, wait_timeout)
-        
-        (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
-        locator = (by_strategy, cleaned_selector)
-            
-        return wait.until(self.selenium['EC'].visibility_of_element_located(locator))
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                # Find element (with or without waiting based on attempt)
+                element = self.find_element(
+                    dropdown_selector,
+                    by,
+                    wait_if_needed=(attempt > 0)  # Use waiting on retries
+                )
+
+                # Try to select option
+                self.selenium['Select'](element).select_by_visible_text(option_text)
+                return  # Success
+
+            except (self.selenium['StaleElementReferenceException'],
+                    self.selenium['ElementNotInteractableException']) as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+            except Exception as e:
+                # For other exceptions, fail immediately
+                raise RuntimeError(
+                    f"Failed to select option '{option_text}' from dropdown '{dropdown_selector}': {e}"
+                )
+
+        # If we get here, all retries failed
+        raise RuntimeError(
+            f"Failed to select option '{option_text}' after {max_retries} attempts. "
+            f"Last error: {last_exception}"
+        )
 
     def wait_for_ready_state_complete(self, timeout: Optional[int] = None) -> None:
         """
@@ -483,27 +589,19 @@ class Browser:
             )
         )
 
-    def sleep(self, seconds: float) -> None:
-        """
-        Sleep for specified number of seconds.
-
-        Args:
-            seconds: Time to sleep
-        """
-        time.sleep(seconds)
-
-    def click(self, selector: str, by: Optional[str] = None) -> None:
+    def click(self, selector: str, by: Optional[str] = None, timeout: int = 10) -> None:
         """
         Click on element identified by selector.
 
         Args:
             selector: Element selector (auto-detects XPath: //, CSS: $)
             by: Explicit selection method ('css' or 'xpath', optional)
+            timeout: Timeout for element finding
         """
-        element = self.wait_for_element(selector, by)
+        element = self.wait_for_element(selector, by, timeout, condition='clickable')
         element.click()
 
-    def type_text(self, selector: str, text: str, by: Optional[str] = None) -> None:
+    def type_text(self, selector: str, text: str, by: Optional[str] = None, timeout: int = 10) -> None:
         """
         Type text into element identified by selector.
 
@@ -511,8 +609,9 @@ class Browser:
             selector: Element selector (auto-detects XPath: //, CSS: $)
             text: Text to type
             by: Explicit selection method ('css' or 'xpath', optional)
+            timeout: Timeout for element finding
         """
-        element = self.wait_for_element(selector, by)
+        element = self.wait_for_element(selector, by, timeout, condition='visibility')
         element.clear()
         element.send_keys(text)
 
@@ -527,7 +626,8 @@ class Browser:
 
     def get_current_handle(self) -> Optional[str]:
         """Get current window handle."""
-        self._validate_driver()
+        if not self.driver:
+            return None
         try:
             return self.driver.current_window_handle
         except self.selenium['WebDriverException']:
@@ -535,7 +635,8 @@ class Browser:
 
     def get_all_handles(self) -> List[str]:
         """Get all window handles."""
-        self._validate_driver()
+        if not self.driver:
+            return []
         try:
             return self.driver.window_handles
         except self.selenium['WebDriverException']:
@@ -551,7 +652,8 @@ class Browser:
         Returns:
             True if successful, False otherwise
         """
-        self._validate_driver()
+        if not self.driver:
+            return False
         try:
             self.driver.switch_to.window(handle)
             return True
@@ -569,7 +671,8 @@ class Browser:
         Returns:
             True if successful, False otherwise
         """
-        self._validate_driver()
+        if not self.driver:
+            return False
         try:
             self.driver.switch_to.new_window('tab')
             new_handle = self.driver.current_window_handle
@@ -592,7 +695,8 @@ class Browser:
         Returns:
             True if successful, False otherwise
         """
-        self._validate_driver()
+        if not self.driver:
+            return False
         try:
             # Refresh window handles list
             all_handles = self.get_all_handles()
@@ -618,7 +722,8 @@ class Browser:
         Returns:
             True if successful, False otherwise
         """
-        self._validate_driver()
+        if not self.driver:
+            return False
         try:
             if self.get_tab_count() <= 1:
                 return False  # Don't close last tab
@@ -667,12 +772,12 @@ class Browser:
               return res;
             });
           };
-          
+
           const _open = XMLHttpRequest.prototype.open;
           XMLHttpRequest.prototype.open = function(m,u) {
             this._m=m; this._u=u; return _open.apply(this, arguments);
           };
-          
+
           const _send = XMLHttpRequest.prototype.send;
           XMLHttpRequest.prototype.send = function(b) {
             this.addEventListener('load', () => {
@@ -701,7 +806,7 @@ class Browser:
         # Ensure page is fully loaded before retrieving logs
         self.wait_for_ready_state_complete()
         self.wait_for_ajax()
-        self.sleep(1)
+        time.sleep(1.0)
 
         logs = self.driver.execute_script("return window.__selenium_logs;")
         return logs or []
@@ -710,9 +815,9 @@ class Browser:
 
     @staticmethod
     def extract_url_parameters(
-        url: str,
-        param: str,
-        split_char: str = ''
+            url: str,
+            param: str,
+            split_char: str = ''
     ) -> List[List[str]]:
         """
         Extract parameter values from URL query string.
@@ -776,8 +881,8 @@ class Browser:
 
     @staticmethod
     def generate_text_selectors(
-        texts: List[str],
-        element_type: str,
+            texts: List[str],
+            element_type: str,
     ) -> List[str]:
         """
         Generate XPath selectors for elements containing specific text.
@@ -796,10 +901,10 @@ class Browser:
         return [f"//{element_type}[normalize-space(.)='{text}']" for text in texts]
 
     def find_common_attribute(
-        self,
-        selectors: List[str],
-        attribute: str,
-        verbose: bool = False
+            self,
+            selectors: List[str],
+            attribute: str,
+            verbose: bool = False
     ) -> str:
         """
         Find the most common attribute value among elements matched by selectors.
@@ -848,12 +953,12 @@ class Chrome(Browser):
     """Chrome browser implementation with enhanced configuration options and method chaining."""
 
     def __init__(
-        self,
-        private_mode: bool = True,
-        mobile_mode: bool = False,
-        headless: bool = False,
-        window_size: str = "1920,1080",
-        window_position: str = "10,10"
+            self,
+            private_mode: bool = True,
+            mobile_mode: bool = False,
+            headless: bool = False,
+            window_size: str = "1920,1080",
+            window_position: str = "10,10"
     ):
         """
         Initialize Chrome browser with enhanced configuration.
@@ -873,7 +978,7 @@ class Chrome(Browser):
         """Initialize Chrome webdriver with custom options."""
         self.options = self.selenium['ChromeOptions']()
         self._setup_default_options()
-        
+
         # Initialize driver
         try:
             self.driver = self.selenium['webdriver'].Chrome(options=self.options)
@@ -888,17 +993,17 @@ class Chrome(Browser):
         # Basic options
         if self._headless:
             self.options.add_argument('--headless')
-        
+
         if self._private_mode:
             self.options.add_argument('--incognito')
-        
+
         # Safe performance and stability options
         self.options.add_argument('--disable-dev-shm-usage')
         self.options.add_argument('--disable-gpu')
         self.options.add_argument('--disable-extensions')
         self.options.add_argument('--disable-plugins')
         self.options.add_argument('--disable-images')
-        
+
         # Mobile emulation
         if self._mobile_mode:
             mobile_emulation = {
@@ -906,12 +1011,12 @@ class Chrome(Browser):
                 "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
             }
             self.options.add_experimental_option("mobileEmulation", mobile_emulation)
-        
+
         # Window size and position
         if not self._mobile_mode:
             width, height = self._window_size.split(',')
             self.options.add_argument(f'--window-size={width},{height}')
-            
+
             x, y = self._window_position.split(',')
             self.options.add_argument(f'--window-position={x},{y}')
 
@@ -977,27 +1082,27 @@ class Firefox(Browser):
         Initialize Firefox webdriver with profile detection and private browsing.
         """
         options = self.selenium['FirefoxOptions']()
-        
+
         # Basic options
         if self._headless:
             options.add_argument('--headless')
-        
+
         # Profile configuration
         profile_path = self._find_firefox_profile()
         if profile_path:
             options.add_argument(f'-profile')
             options.add_argument(profile_path)
-        
+
         # Private browsing
         if self._private_mode:
             options.add_argument('-private')
             options.set_preference('browser.privatebrowsing.autostart', True)
-        
+
         # Safe performance preferences (keeping security features enabled)
         options.set_preference('network.proxy.type', 0)  # No proxy
         options.set_preference('dom.webdriver.enabled', False)
         options.set_preference('useAutomationExtension', False)
-        
+
         # Mobile emulation for Firefox (basic user agent change)
         if self._mobile_mode:
             mobile_user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
@@ -1006,15 +1111,15 @@ class Firefox(Browser):
         # Initialize driver
         try:
             self.driver = self.selenium['webdriver'].Firefox(options=options)
-            
+
             # Set window size and position after initialization
             if not self._mobile_mode:
                 width, height = map(int, self._window_size.split(','))
                 x, y = map(int, self._window_position.split(','))
-                
+
                 self.driver.set_window_size(width, height)
                 self.driver.set_window_position(x, y)
-                
+
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize Firefox driver: {e}\n"
@@ -1052,50 +1157,76 @@ class Firefox(Browser):
 
 # Example usage demonstrating the enhanced functionality
 if __name__ == '__main__':
-    print("qufe.wbhandler Example Usage")
-    print("=" * 30)
-    
+    print("qufe.wbhandler Example Usage with Improved Implementation")
+    print("=" * 60)
+
     # Example with Chrome and method chaining
     chrome = Chrome()
-    
+
     try:
         print("Configuring Chrome with secure defaults...")
         chrome.configure_new_window().configure_no_automation().configure_detach()
-        
+
         print("\nOpening first page with safe timeout...")
         chrome.open("https://httpbin.org/get", safe_timeout=True)
-        
+
         # Inject network capture
         chrome.inject_network_capture()
         print("✓ Network capture injected")
-        
+
         # Wait for network to settle
         if chrome.wait_for_network_idle(idle_time=2.0):
             print("✓ Network activity settled")
         else:
             print("⚠ Network timeout, but continuing...")
-        
+
+        # Demonstrate improved element finding
+        print("\nDemonstrating improved element finding...")
+
+        # Example 1: Static content (fast path)
+        try:
+            element = chrome.find_element("body", wait_if_needed=False)
+            print("✓ Static element found immediately (fast path)")
+        except Exception as e:
+            print(f"✗ Static element failed: {e}")
+
+        # Example 2: Dynamic content with fallback
+        try:
+            # This will use fast path first, then fallback if needed
+            element = chrome.find_element("//body", wait_if_needed=True, timeout=5)
+            print("✓ Element found with fallback available")
+        except Exception as e:
+            print(f"✗ Element finding failed: {e}")
+
         # Demonstrate tab management
-        print(f"Current tab count: {chrome.get_tab_count()}")
-        
+        print(f"\nCurrent tab count: {chrome.get_tab_count()}")
+
         print("Opening new tab with safe timeout...")
         if chrome.open_new_tab("https://httpbin.org/html", safe_timeout=True):
             print("✓ New tab opened")
-        
+
         print(f"Updated tab count: {chrome.get_tab_count()}")
-        
+
         # Switch between tabs
         print("Switching to first tab...")
         if chrome.switch_to_tab(0):
             print("✓ Switched to first tab")
-        
+
+        # Demonstrate improved dropdown selection
+        try:
+            # This would work if there was a select element on the page
+            # chrome.select_option_by_text("#country", "Korea", max_retries=3)
+            print("✓ Dropdown selection method available with retry logic")
+        except Exception:
+            print("⚠ No dropdown to test, but method is implemented")
+
         # Demonstrate URL parameter extraction
         test_url = "https://example.com?param1=value1&param2=value2,value3"
         params = Chrome.extract_url_parameters(test_url, 'param2', ',')
         print(f"Extracted params: {params}")
-        
-        print("Session completed successfully")
-        
+
+        print("\nSession completed successfully")
+
     except KeyboardInterrupt:
         print("\nSession interrupted by user")
     except Exception as e:
