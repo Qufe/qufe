@@ -17,7 +17,7 @@ Install only the features you need:
 For detailed installation and usage instructions, see: https://qufe.readthedocs.io
 """
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 __author__ = "Bongtae Jeon"
 __email__ = "bongtae.jeon@gmail.com"
 

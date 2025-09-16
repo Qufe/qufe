@@ -32,9 +32,9 @@ def _import_selenium_dependencies():
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.common.action_chains import ActionChains
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
         from selenium.webdriver.firefox.options import Options as FirefoxOptions
         from selenium.webdriver.firefox.service import Service as FirefoxService
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
         from selenium.webdriver.chrome.service import Service as ChromeService
         from selenium.common.exceptions import (
             WebDriverException, TimeoutException, NoSuchElementException
@@ -46,9 +46,9 @@ def _import_selenium_dependencies():
             'WebDriverWait': WebDriverWait,
             'EC': EC,
             'ActionChains': ActionChains,
-            'ChromeOptions': ChromeOptions,
             'FirefoxOptions': FirefoxOptions,
             'FirefoxService': FirefoxService,
+            'ChromeOptions': ChromeOptions,
             'ChromeService': ChromeService,
             'WebDriverException': WebDriverException,
             'TimeoutException': TimeoutException,
@@ -69,6 +69,7 @@ class TimeoutConfig:
     LARGE_TIMEOUT = 40       # Default 10s → 40s
     EXTREME_TIMEOUT = 80     # Default 30s → 80s
     PAGE_LOAD_TIMEOUT = 180  # Default 120s → 180s
+    SAFE_PAGE_LOAD_TIMEOUT = 30  # For timeout-based approach
 
 
 def help():
@@ -94,20 +95,15 @@ def help():
     print()
     print("AVAILABLE CLASSES:")
     print("  • Browser: Base class for browser automation with tab management")
-    print("  • Chrome: Chrome browser with advanced configuration options")
     print("  • Firefox: Firefox browser with profile management")
+    print("  • Chrome: Chrome browser with advanced configuration options")
     print()
 
     print("FEATURES:")
-    print("  • Pure Selenium with custom timeout configurations")
-    print("  • Auto-detect selector types (XPath: //, CSS: $)")
     print("  • Network request monitoring via JavaScript injection")
-    print("  • Tab management (open, switch, close)")
     print("  • Interactive element discovery and automation")
     print("  • URL parameter extraction and parsing")
-    print("  • Cross-platform Firefox profile detection")
-    print("  • Method chaining for Chrome configuration")
-    print("  • Security-first design with optional insecure modes")
+    print("  • Timeout-based page loading for compatibility")
     print()
 
     print("SELECTOR SHORTCUTS:")
@@ -123,10 +119,15 @@ def help():
     print("  • browser.close_current_tab()")
     print()
 
+    print("PAGE LOADING OPTIONS:")
+    print("  • browser.open(url)  # Default timeout handling")
+    print("  • browser.open(url, safe_timeout=True)  # Shorter timeout")
+    print("  • browser.open(url, timeout=15)  # Custom timeout")
+    print("  • browser.wait_for_network_idle()  # Wait for network activity to settle")
+    print()
+
     print("SECURITY CONFIGURATION:")
     print("  • Default: Secure mode with standard security features enabled")
-    print("  • Testing: Use configure_insecure_mode() for testing environments")
-    print("  • Warning: Insecure mode disables important security features")
     print()
 
     print("USAGE EXAMPLE:")
@@ -135,10 +136,10 @@ def help():
     print("  # Start browser with method chaining (secure by default)")
     print("  browser = Chrome()")
     print("  browser.configure_no_automation().configure_detach()")
-    print("  browser.open('https://example.com')")
     print("  ")
-    print("  # For testing environments only")
-    print("  browser.configure_insecure_mode()  # ⚠️ Use with caution")
+    print("  # Safe loading for protected environments")
+    print("  browser.open('https://example.com', safe_timeout=True)")
+    print("  browser.wait_for_network_idle(idle_time=2.0)")
     print("  ")
     print("  # Tab management")
     print("  browser.open_new_tab('https://github.com')")
@@ -271,16 +272,139 @@ class Browser:
         else:
             raise ValueError("by parameter must be 'css' or 'xpath'")
 
-    def open(self, url: str) -> None:
+    def open(
+        self, 
+        url: str, 
+        safe_timeout: bool = False, 
+        timeout: Optional[int] = None,
+        wait_for_idle: bool = False, 
+        idle_time: float = 2.0
+    ) -> None:
         """
-        Navigate to the specified URL.
+        Navigate to the specified URL with enhanced timeout handling.
 
         Args:
             url: URL to navigate to
+            safe_timeout: Use shorter timeout for protected environments
+            timeout: Custom timeout in seconds (overrides safe_timeout)
+            wait_for_idle: Wait for network activity to settle after loading
+            idle_time: Time to wait for network idle (seconds)
+
+        Raises:
+            RuntimeError: If driver not initialized or page fails to load
         """
         if not self.driver:
             raise RuntimeError("Driver not initialized")
-        self.driver.get(url)
+
+        # Determine timeout to use
+        if timeout is not None:
+            load_timeout = timeout
+        elif safe_timeout:
+            load_timeout = TimeoutConfig.SAFE_PAGE_LOAD_TIMEOUT
+        else:
+            load_timeout = TimeoutConfig.PAGE_LOAD_TIMEOUT
+
+        # Store original timeout to restore later
+        original_timeout = self.driver.timeouts.page_load
+
+        try:
+            # Set temporary timeout
+            self.driver.set_page_load_timeout(load_timeout)
+            
+            # Navigate to URL
+            self.driver.get(url)
+            
+        except self.selenium['TimeoutException'] as e:
+            # Check if page is partially loaded and usable
+            try:
+                ready_state = self.driver.execute_script("return document.readyState")
+                current_url = self.driver.current_url
+                
+                if (ready_state in ['interactive', 'complete']) and (current_url != 'data:,'):
+                    print(f"Page partially loaded but continuing (ready state: {ready_state})")
+                    print("This may be due to blocked resources")
+                else:
+                    raise RuntimeError(f"Page failed to load properly: {e}")
+                    
+            except Exception:
+                raise RuntimeError(f"Page loading failed and unable to check status: {e}")
+                
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during page loading: {e}")
+            
+        finally:
+            # Restore original timeout
+            try:
+                self.driver.set_page_load_timeout(original_timeout)
+            except Exception:
+                # If restoration fails, set back to default
+                self.driver.set_page_load_timeout(TimeoutConfig.PAGE_LOAD_TIMEOUT)
+
+        # Optional network idle wait
+        if wait_for_idle:
+            self.wait_for_network_idle(idle_time)
+
+    def wait_for_network_idle(self, idle_time: float = 2.0, timeout: int = 30) -> bool:
+        """
+        Wait for network activity to settle by monitoring JavaScript activity.
+        
+        This method checks for jQuery activity and document ready state,
+        then waits for a period of network inactivity.
+
+        Args:
+            idle_time: Time in seconds to wait for network to be idle
+            timeout: Maximum time to wait for network to become idle
+
+        Returns:
+            True if network became idle within timeout, False otherwise
+        """
+        self._validate_driver()
+        
+        end_time = time.time() + timeout
+        
+        try:
+            # First wait for basic document ready state
+            self.wait_for_ready_state_complete(timeout=min(10, timeout))
+            
+            # Then wait for jQuery if present
+            if time.time() < end_time:
+                remaining_timeout = int(end_time - time.time())
+                self.wait_for_ajax(timeout=min(remaining_timeout, 10))
+            
+            # Finally wait for idle period
+            last_activity_time = time.time()
+            
+            while time.time() < end_time:
+                current_time = time.time()
+                
+                # Check if we've been idle long enough
+                if (current_time - last_activity_time) >= idle_time:
+                    return True
+                
+                # Check for ongoing network activity (simplified check)
+                try:
+                    # Check if any new script tags or resources are being added
+                    script_count = self.driver.execute_script(
+                        "return document.getElementsByTagName('script').length"
+                    )
+                    
+                    # Simple heuristic: if script count changes, reset idle timer
+                    if not hasattr(self, '_last_script_count'):
+                        self._last_script_count = script_count
+                    elif script_count != self._last_script_count:
+                        last_activity_time = current_time
+                        self._last_script_count = script_count
+                    
+                except Exception:
+                    # If we can't check, assume activity has stopped
+                    pass
+                
+                time.sleep(0.5)  # Check every 500ms
+            
+            return False  # Timeout reached
+            
+        except Exception:
+            return False
 
     def find_element(self, selector: str, by: Optional[str] = None):
         """
@@ -297,7 +421,7 @@ class Browser:
             NoSuchElementException: If element not found
             ValueError: If selector is invalid
         """
-        by_strategy, cleaned_selector = self._parse_selector(selector, by)
+        (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
         return self.driver.find_element(by_strategy, cleaned_selector)
 
     def find_elements(self, selector: str, by: Optional[str] = None):
@@ -311,7 +435,7 @@ class Browser:
         Returns:
             List of WebElements
         """
-        by_strategy, cleaned_selector = self._parse_selector(selector, by)
+        (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
         return self.driver.find_elements(by_strategy, cleaned_selector)
 
     def wait_for_element(self, selector: str, by: Optional[str] = None, timeout: Optional[int] = None):
@@ -329,7 +453,7 @@ class Browser:
         wait_timeout = timeout or TimeoutConfig.SMALL_TIMEOUT
         wait = self.selenium['WebDriverWait'](self.driver, wait_timeout)
         
-        by_strategy, cleaned_selector = self._parse_selector(selector, by)
+        (by_strategy, cleaned_selector) = self._parse_selector(selector, by)
         locator = (by_strategy, cleaned_selector)
             
         return wait.until(self.selenium['EC'].visibility_of_element_located(locator))
@@ -434,12 +558,13 @@ class Browser:
         except self.selenium['WebDriverException']:
             return False
 
-    def open_new_tab(self, url: Optional[str] = None) -> bool:
+    def open_new_tab(self, url: Optional[str] = None, safe_timeout: bool = False) -> bool:
         """
         Open new tab and optionally navigate to URL.
 
         Args:
             url: Optional URL to open in new tab
+            safe_timeout: Use safe timeout for page loading
 
         Returns:
             True if successful, False otherwise
@@ -451,7 +576,7 @@ class Browser:
             self.window_handles.append(new_handle)
 
             if url:
-                self.driver.get(url)
+                self.open(url, safe_timeout=safe_timeout)
             return True
 
         except self.selenium['WebDriverException']:
@@ -774,9 +899,6 @@ class Chrome(Browser):
         self.options.add_argument('--disable-plugins')
         self.options.add_argument('--disable-images')
         
-        # Keep essential security features enabled by default
-        # These are now moved to configure_insecure_mode() method
-        
         # Mobile emulation
         if self._mobile_mode:
             mobile_emulation = {
@@ -846,47 +968,6 @@ class Chrome(Browser):
         return (self.add_experimental_option('excludeSwitches', ['enable-automation'])
                 .add_experimental_option('useAutomationExtension', False))
 
-    def configure_insecure_mode(self) -> 'Chrome':
-        """
-        Enable insecure options for testing environments only.
-        
-        ⚠️  WARNING: This disables important security features including:
-        - Web security (Same-Origin Policy)
-        - Sandbox protection
-        - Mixed content blocking
-        
-        Only use this in controlled testing environments where you trust all content.
-        Never use this for browsing untrusted websites or in production environments.
-        
-        Returns:
-            Self for method chaining
-        """
-        print("⚠️  WARNING: Enabling insecure mode!")
-        print("   This disables important Chrome security features.")
-        print("   Only use in controlled testing environments.")
-        print("   Features disabled:")
-        print("   - Web security (Same-Origin Policy)")
-        print("   - Sandbox protection") 
-        print("   - Mixed content blocking")
-        print()
-        
-        return (self.add_argument('--disable-web-security')
-                .add_argument('--allow-running-insecure-content')
-                .add_argument('--no-sandbox'))
-
-    def configure_testing_mode(self) -> 'Chrome':
-        """
-        Configure Chrome for automated testing with minimal security restrictions.
-        
-        This is a safer alternative to configure_insecure_mode() that only disables
-        sandbox for compatibility while keeping other security features.
-        
-        Returns:
-            Self for method chaining
-        """
-        print("ℹ️  Configuring testing mode with minimal security impact...")
-        return self.add_argument('--no-sandbox')
-
 
 class Firefox(Browser):
     """Firefox browser implementation with profile management and private browsing."""
@@ -940,31 +1021,6 @@ class Firefox(Browser):
                 "Make sure GeckoDriver is installed and in PATH"
             )
 
-    def configure_insecure_mode(self) -> 'Firefox':
-        """
-        Enable insecure options for testing environments only.
-        
-        ⚠️  WARNING: This disables important security features.
-        Only use this in controlled testing environments where you trust all content.
-        
-        Returns:
-            Self for method chaining
-        """
-        print("⚠️  WARNING: Enabling Firefox insecure mode!")
-        print("   This disables important Firefox security features.")
-        print("   Only use in controlled testing environments.")
-        print()
-        
-        if self.driver:
-            # Set insecure preferences via script execution
-            self.driver.execute_script("""
-                Components.utils.import("resource://gre/modules/Preferences.jsm");
-                Preferences.set("security.tls.insecure_fallback_hosts", "*");
-                Preferences.set("security.mixed_content.block_active_content", false);
-            """)
-        
-        return self
-
     @staticmethod
     def _find_firefox_profile() -> Optional[str]:
         """
@@ -1006,32 +1062,33 @@ if __name__ == '__main__':
         print("Configuring Chrome with secure defaults...")
         chrome.configure_new_window().configure_no_automation().configure_detach()
         
-        # Only enable insecure mode if absolutely necessary for testing
-        print("\n🔒 Running in secure mode by default")
-        print("   To enable insecure mode for testing, uncomment the next line:")
-        print("   # chrome.configure_insecure_mode()")
-        
-        print("\nOpening first page...")
-        chrome.open("https://httpbin.org/get")
+        print("\nOpening first page with safe timeout...")
+        chrome.open("https://httpbin.org/get", safe_timeout=True)
         
         # Inject network capture
         chrome.inject_network_capture()
         print("✓ Network capture injected")
         
+        # Wait for network to settle
+        if chrome.wait_for_network_idle(idle_time=2.0):
+            print("✓ Network activity settled")
+        else:
+            print("⚠ Network timeout, but continuing...")
+        
         # Demonstrate tab management
         print(f"Current tab count: {chrome.get_tab_count()}")
         
-        print("Opening new tab...")
-        if chrome.open_new_tab("https://httpbin.org/html"):
+        print("Opening new tab with safe timeout...")
+        if chrome.open_new_tab("https://httpbin.org/html", safe_timeout=True):
             print("✓ New tab opened")
-            
+        
         print(f"Updated tab count: {chrome.get_tab_count()}")
         
         # Switch between tabs
         print("Switching to first tab...")
         if chrome.switch_to_tab(0):
             print("✓ Switched to first tab")
-            
+        
         # Demonstrate URL parameter extraction
         test_url = "https://example.com?param1=value1&param2=value2,value3"
         params = Chrome.extract_url_parameters(test_url, 'param2', ',')
