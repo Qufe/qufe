@@ -329,9 +329,9 @@ def extract_price(p: str, strict: bool = True) -> float:
             raise ValueError(f"No number found: '{p}'")
         return 0.0
 
-    # If multiple number fragments exist, combine them into a single number
-    # Example: "1234원56전" -> ["1234", "56"] -> "123456"
-    combined = ''.join(number_pattern)
+    # Use only the first number fragment found
+    # Example: "1234원56전" -> ["1234", "56"] -> "1234"
+    combined = number_pattern[0]
 
     # 4. Check decimal point count
     decimal_count = combined.count('.')
