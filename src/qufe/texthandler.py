@@ -7,11 +7,13 @@ This module provides functions for:
 - Pretty-printing nested dictionaries
 - Extracting substrings between delimiters
 - Displaying items in column format
+- Extracts price from a string and returns it as float
 """
 
 from itertools import zip_longest
 from collections.abc import Iterable
 from typing import List, Dict, Any, Union
+import re
 
 
 def list_to_doku_wiki_table(data: List[List[str]]) -> None:
@@ -248,3 +250,106 @@ def print_in_columns(
     else:
         print('\n'.join(result))
         return None
+
+
+def extract_price(p: str, strict: bool = True) -> float:
+    """
+    Extracts price from a string and returns it as float.
+
+    Args:
+        p: String containing price information
+        strict: If True, raises ValueError when no number is found,
+               If False, returns 0.0 when no number is found (default: True)
+
+    Returns:
+        float: Extracted price
+
+    Raises:
+        ValueError: When strict=True and no number is found, or when multiple decimal points exist
+
+    Examples:
+        >>> PriceExtractor.extract_price("1,234.56원")
+        1234.56
+        >>> PriceExtractor.extract_price("₩ 1_234_567")
+        1234567.0
+        >>> PriceExtractor.extract_price("2,500원 (including tax)")
+        2500.0
+        >>> PriceExtractor.extract_price("text only", strict=False)
+        0.0
+        >>> PriceExtractor.extract_price("text only", strict=True)
+        ValueError: No number found
+
+    Test Examples:
+        # strict=True (default) tests
+        test_cases = [
+            ("1,234.56원", 1234.56),
+            ("₩ 2,500", 2500.0),
+            ("1_000_000", 1000000.0),
+            ("3,456.78 (including tax)", 3456.78),
+            ("USD 99.99 [discounted]", 99.99),
+        ]
+
+        # strict=False tests
+        lenient_cases = [
+            ("1,234.56원", 1234.56),
+            ("no price", 0.0),
+            ("text only", 0.0),
+            ("", 0.0),
+            (None, 0.0),
+            ("100원", 100.0),
+            ("free (0원)", 0.0),  # no number before bracket
+        ]
+
+        # Always error cases (regardless of strict mode)
+        error_cases = [
+            "1.234.56",  # multiple decimal points
+        ]
+    """
+    # Handle None or empty string
+    if not p or not isinstance(p, str):
+        if strict:
+            raise ValueError(f"Invalid input: {p}")
+        return 0.0
+
+    # 1. If brackets exist, extract only the part before the first bracket
+    brackets = ['(', '[', '{']
+    for bracket in brackets:
+        if bracket in p:
+            p = p.split(bracket)[0]
+
+    # 2. Remove commas, spaces, underscores
+    cleaned = p.replace(',', '').replace(' ', '').replace('_', '')
+
+    # 3. Extract only numbers and decimal points (using regex)
+    # Find all parts consisting of digits and decimal points
+    number_pattern = re.findall(r'[\d.]+', cleaned)
+
+    if not number_pattern:
+        if strict:
+            raise ValueError(f"No number found: '{p}'")
+        return 0.0
+
+    # If multiple number fragments exist, combine them into a single number
+    # Example: "1234원56전" -> ["1234", "56"] -> "123456"
+    combined = ''.join(number_pattern)
+
+    # 4. Check decimal point count
+    decimal_count = combined.count('.')
+    if decimal_count > 1:
+        # Multiple decimal points always cause error (regardless of strict mode)
+        raise ValueError(f"Multiple decimal points found: '{p}' -> '{combined}'")
+
+    # 5. Check for empty string or only decimal point
+    if combined == '.' or combined == '':
+        if strict:
+            raise ValueError(f"No valid number found: '{p}'")
+        return 0.0
+
+    # 6. Convert to float
+    try:
+        result = float(combined)
+        return result
+    except ValueError as e:
+        if strict:
+            raise ValueError(f"Number conversion failed: '{p}' -> '{combined}', error: {e}")
+        return 0.0
