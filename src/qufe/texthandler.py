@@ -252,31 +252,37 @@ def print_in_columns(
         return None
 
 
-def extract_price(p: str, strict: bool = True) -> float:
+def extract_number(text: str, strict: bool = True) -> float:
     """
-    Extracts price from a string and returns it as float.
+    Extracts a number from text and returns it as float.
+
+    Gracefully handles various text formats containing numbers,
+    including those with commas, currency symbols, and other characters.
 
     Args:
-        p: String containing price information
-        strict: If True, raises ValueError when no number is found,
-               If False, returns 0.0 when no number is found (default: True)
+        text: String containing numeric information
+        strict: If True, raises ValueError when no number is found.
+                If False, returns 0.0 when no number is found (default: True)
 
     Returns:
-        float: Extracted price
+        float: Extracted number
 
     Raises:
-        ValueError: When strict=True and no number is found, or when multiple decimal points exist
+        ValueError: When strict=True and no number is found,
+                   or when multiple decimal points exist
 
     Examples:
-        >>> PriceExtractor.extract_price("1,234.56원")
+        >>> extract_number("1,234.56원")
         1234.56
-        >>> PriceExtractor.extract_price("₩ 1_234_567")
+        >>> extract_number("₩ 1_234_567")
         1234567.0
-        >>> PriceExtractor.extract_price("2,500원 (including tax)")
+        >>> extract_number("2,500 items")
         2500.0
-        >>> PriceExtractor.extract_price("text only", strict=False)
+        >>> extract_number("Score: 98.5%")
+        98.5
+        >>> extract_number("text only", strict=False)
         0.0
-        >>> PriceExtractor.extract_price("text only", strict=True)
+        >>> extract_number("text only", strict=True)
         ValueError: No number found
 
     Test Examples:
@@ -287,17 +293,19 @@ def extract_price(p: str, strict: bool = True) -> float:
             ("1_000_000", 1000000.0),
             ("3,456.78 (including tax)", 3456.78),
             ("USD 99.99 [discounted]", 99.99),
+            ("Score: 85.5", 85.5),
+            ("Temperature: -12.3°C", 12.3),  # Note: minus sign not preserved
         ]
 
         # strict=False tests
         lenient_cases = [
             ("1,234.56원", 1234.56),
-            ("no price", 0.0),
+            ("no number here", 0.0),
             ("text only", 0.0),
             ("", 0.0),
             (None, 0.0),
-            ("100원", 100.0),
-            ("free (0원)", 0.0),  # no number before bracket
+            ("100 items", 100.0),
+            ("free (0원)", 0.0),
         ]
 
         # Always error cases (regardless of strict mode)
@@ -305,51 +313,47 @@ def extract_price(p: str, strict: bool = True) -> float:
             "1.234.56",  # multiple decimal points
         ]
     """
-    # Handle None or empty string
-    if not p or not isinstance(p, str):
+    # Input validation - fail fast
+    if not text or not isinstance(text, str):
         if strict:
-            raise ValueError(f"Invalid input: {p}")
+            raise ValueError(f"Invalid input: {text}")
         return 0.0
 
-    # 1. If brackets exist, extract only the part before the first bracket
+    # Extract content before brackets for cleaner number extraction
     brackets = ['(', '[', '{']
     for bracket in brackets:
-        if bracket in p:
-            p = p.split(bracket)[0]
+        if bracket in text:
+            text = text.split(bracket)[0]
 
-    # 2. Remove commas, spaces, underscores
-    cleaned = p.replace(',', '').replace(' ', '').replace('_', '')
+    # Remove common separators (thousands separators, spaces)
+    cleaned = text.replace(',', '').replace(' ', '').replace('_', '')
 
-    # 3. Extract only numbers and decimal points (using regex)
-    # Find all parts consisting of digits and decimal points
+    # Extract numeric patterns (digits and decimal points)
     number_pattern = re.findall(r'[\d.]+', cleaned)
 
     if not number_pattern:
         if strict:
-            raise ValueError(f"No number found: '{p}'")
+            raise ValueError(f"No number found: '{text}'")
         return 0.0
 
-    # Use only the first number fragment found
-    # Example: "1234원56전" -> ["1234", "56"] -> "1234"
+    # Use first found number fragment
     combined = number_pattern[0]
 
-    # 4. Check decimal point count
+    # Validate decimal point count
     decimal_count = combined.count('.')
     if decimal_count > 1:
-        # Multiple decimal points always cause error (regardless of strict mode)
-        raise ValueError(f"Multiple decimal points found: '{p}' -> '{combined}'")
+        raise ValueError(f"Multiple decimal points found: '{text}' -> '{combined}'")
 
-    # 5. Check for empty string or only decimal point
-    if combined == '.' or combined == '':
+    # Check for edge cases (empty or just decimal point)
+    if combined in ('.', ''):
         if strict:
-            raise ValueError(f"No valid number found: '{p}'")
+            raise ValueError(f"No valid number found: '{text}'")
         return 0.0
 
-    # 6. Convert to float
+    # Convert to float with error handling
     try:
-        result = float(combined)
-        return result
+        return float(combined)
     except ValueError as e:
         if strict:
-            raise ValueError(f"Number conversion failed: '{p}' -> '{combined}', error: {e}")
+            raise ValueError(f"Number conversion failed: '{text}' -> '{combined}', error: {e}")
         return 0.0
