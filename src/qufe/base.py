@@ -1,8 +1,12 @@
-import os
-import importlib.util as ut
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import difflib
+import importlib.util as ut
+import os
+import re
+import socket
+import time
+from datetime import datetime
+from typing import Optional, Dict
+from zoneinfo import ZoneInfo
 
 
 class TS:
@@ -253,3 +257,292 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
         result[top_key] = merged
     
     return result
+
+
+# ============================================================================
+# Network Utilities
+# ============================================================================
+
+
+class WOL:
+    """Wake-on-LAN utility for network device control."""
+
+    def __init__(self, verbose: bool = True):
+        """
+        Initialize Wake-on-LAN handler.
+
+        Args:
+            verbose: Enable detailed output messages (default: True)
+        """
+        self.verbose = verbose
+
+    def validate_mac(self, mac: str) -> bool:
+        """
+        Validate MAC address format.
+
+        Args:
+            mac: MAC address string
+
+        Returns:
+            True if valid MAC address format
+
+        Example:
+            >>> wol = WOL()
+            >>> wol.validate_mac("AA:BB:CC:DD:EE:FF")
+            True
+            >>> wol.validate_mac("AA-BB-CC-DD-EE-FF")
+            True
+        """
+        # Support various MAC formats: XX:XX:XX:XX:XX:XX, XX-XX-XX-XX-XX-XX, XXXXXXXXXXXX
+        mac_pattern = re.compile(r'^([0-9A-Fa-f]{2}[:-]?){5}([0-9A-Fa-f]{2})$')
+        return bool(mac_pattern.match(mac.replace(' ', '')))
+
+    def format_mac(self, mac: str) -> str:
+        """
+        Format MAC address to standard colon notation.
+
+        Args:
+            mac: MAC address string in any supported format
+
+        Returns:
+            MAC address in XX:XX:XX:XX:XX:XX format
+
+        Raises:
+            ValueError: If MAC address format is invalid
+
+        Example:
+            >>> wol = WOL()
+            >>> wol.format_mac("aabbccddeeff")
+            'AA:BB:CC:DD:EE:FF'
+        """
+        # Remove all separators
+        mac_clean = re.sub(r'[:\-\s]', '', mac).upper()
+
+        # Validate length
+        if len(mac_clean) != 12:
+            raise ValueError(f"Invalid MAC address length: {len(mac_clean)} (expected 12)")
+
+        # Format as XX:XX:XX:XX:XX:XX
+        return ':'.join(mac_clean[i:i + 2] for i in range(0, 12, 2))
+
+    def create_magic_packet(self, mac: str) -> bytes:
+        """
+        Create WOL magic packet.
+
+        Magic packet structure:
+        - 6 bytes of 0xFF (synchronization stream)
+        - Target MAC address repeated 16 times
+
+        Args:
+            mac: Target device MAC address
+
+        Returns:
+            Magic packet as bytes
+
+        Example:
+            >>> wol = WOL()
+            >>> packet = wol.create_magic_packet("AA:BB:CC:DD:EE:FF")
+            >>> len(packet)
+            102
+        """
+        mac_formatted = self.format_mac(mac)
+        mac_bytes = bytes.fromhex(mac_formatted.replace(':', ''))
+
+        # Magic packet: 0xFF * 6 + MAC * 16
+        return b'\xff' * 6 + mac_bytes * 16
+
+    def send_packet(self,
+                    mac: str,
+                    broadcast_ip: str = '255.255.255.255',
+                    port: int = 9,
+                    attempts: int = 3,
+                    delay: float = 0.5) -> bool:
+        """
+        Send WOL magic packet to network.
+
+        Args:
+            mac: Target device MAC address
+            broadcast_ip: Broadcast IP address (default: 255.255.255.255)
+            port: WOL port (default: 9, alternative: 7)
+            attempts: Number of send attempts (default: 3)
+            delay: Delay between attempts in seconds (default: 0.5)
+
+        Returns:
+            True if packet sent successfully
+
+        Example:
+            >>> wol = WOL()
+            >>> success = wol.send_packet("AA:BB:CC:DD:EE:FF")
+        """
+        if not self.validate_mac(mac):
+            raise ValueError(f"Invalid MAC address format: {mac}")
+
+        packet = self.create_magic_packet(mac)
+
+        # Create UDP socket with broadcast enabled
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+            for attempt in range(attempts):
+                try:
+                    sock.sendto(packet, (broadcast_ip, port))
+                    if self.verbose:
+                        print(f"  [{attempt + 1}/{attempts}] Magic packet sent to {broadcast_ip}:{port}")
+
+                    if attempt < attempts - 1:
+                        time.sleep(delay)
+
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  [{attempt + 1}/{attempts}] Send failed: {e}")
+                    return False
+
+            return True
+
+    def wake(self,
+             mac: str,
+             device_name: Optional[str] = None,
+             subnet_broadcast: Optional[str] = None) -> bool:
+        """
+        Wake network device using Wake-on-LAN.
+
+        Args:
+            mac: Target device MAC address
+            device_name: Device name for display (optional)
+            subnet_broadcast: Subnet broadcast address (e.g., 192.168.1.255)
+
+        Returns:
+            True if wake signals sent successfully
+
+        Example:
+            >>> wol = WOL()
+            >>> wol.wake("AA:BB:CC:DD:EE:FF", device_name="Development Server")
+
+            >>> # With subnet broadcast
+            >>> wol.wake("AA:BB:CC:DD:EE:FF",
+            ...          device_name="Office PC",
+            ...          subnet_broadcast="192.168.1.255")
+        """
+        success = True
+
+        if self.verbose:
+            print("=" * 50)
+            print("Wake-on-LAN")
+            print("=" * 50)
+            if device_name:
+                print(f"Target device: {device_name}")
+
+            try:
+                mac_formatted = self.format_mac(mac)
+                print(f"MAC address: {mac_formatted}")
+            except ValueError as e:
+                print(f"Error: {e}")
+                return False
+
+            print("-" * 50)
+
+        # Send via global broadcast
+        if self.verbose:
+            print("Sending via global broadcast (255.255.255.255)...")
+
+        if not self.send_packet(mac):
+            success = False
+            if self.verbose:
+                print("Global broadcast failed")
+        elif self.verbose:
+            print("Global broadcast sent successfully")
+
+        # Send via subnet broadcast if provided
+        if subnet_broadcast:
+            if self.verbose:
+                print(f"\nSending via subnet broadcast ({subnet_broadcast})...")
+
+            if not self.send_packet(mac, broadcast_ip=subnet_broadcast):
+                success = False
+                if self.verbose:
+                    print("Subnet broadcast failed")
+            elif self.verbose:
+                print("Subnet broadcast sent successfully")
+
+        if self.verbose:
+            print("-" * 50)
+            if success:
+                print("Wake signal sent. Device should power on within 10-30 seconds.")
+            else:
+                print("Failed to send wake signal.")
+            print("=" * 50)
+
+        return success
+
+
+def wake_device(mac: str,
+                device_name: Optional[str] = None,
+                subnet_broadcast: Optional[str] = None,
+                verbose: bool = True) -> bool:
+    """
+    Wake network device using Wake-on-LAN (convenience function).
+
+    Args:
+        mac: Target device MAC address
+        device_name: Device name for display (optional)
+        subnet_broadcast: Subnet broadcast address (optional)
+        verbose: Enable detailed output (default: True)
+
+    Returns:
+        True if wake signals sent successfully
+
+    Example:
+        >>> # Simple usage
+        >>> wake_device("AA:BB:CC:DD:EE:FF")
+
+        >>> # With device name and subnet
+        >>> wake_device("AA:BB:CC:DD:EE:FF",
+        ...            device_name="Development Server",
+        ...            subnet_broadcast="192.168.1.255")
+
+        >>> # Silent mode
+        >>> success = wake_device("AA:BB:CC:DD:EE:FF", verbose=False)
+    """
+    wol = WOL(verbose=verbose)
+    return wol.wake(mac, device_name, subnet_broadcast)
+
+
+def wake_multiple_devices(devices: Dict[str, str],
+                          subnet_broadcast: Optional[str] = None,
+                          verbose: bool = True,
+                          delay: float = 1.0) -> Dict[str, bool]:
+    """
+    Wake multiple network devices sequentially.
+
+    Args:
+        devices: Dictionary of {device_name: mac_address}
+        subnet_broadcast: Subnet broadcast address (optional)
+        verbose: Enable detailed output (default: True)
+        delay: Delay between devices in seconds (default: 1.0)
+
+    Returns:
+        Dictionary of {device_name: success_status}
+
+    Example:
+        >>> devices = {
+        ...     "Development Server": "AA:BB:CC:DD:EE:FF",
+        ...     "Testing Machine": "11:22:33:44:55:66",
+        ...     "Database Server": "99:88:77:66:55:44"
+        ... }
+        >>> results = wake_multiple_devices(devices, subnet_broadcast="192.168.1.255")
+        >>> for device, success in results.items():
+        ...     status = "OK" if success else "FAILED"
+        ...     print(f"{device}: {status}")
+    """
+    wol = WOL(verbose=verbose)
+    results = {}
+
+    for i, (name, mac) in enumerate(devices.items()):
+        if i > 0:
+            time.sleep(delay)
+            if verbose:
+                print("\n")
+
+        results[name] = wol.wake(mac, device_name=name, subnet_broadcast=subnet_broadcast)
+
+    return results
