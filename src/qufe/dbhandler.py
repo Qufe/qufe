@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Union
 from contextlib import contextmanager
+import time
 
 
 def help():
@@ -48,6 +49,10 @@ def help():
     print("from qufe.dbhandler import SQLiteHandler")
     print("SQLiteHandler.quick_peek('data.db')")
     print("df = SQLiteHandler.to_dataframe('data.db', 'table_name')")
+    print()
+    print("# SQLite - Scan multiple databases")
+    print("results = SQLiteHandler.quick_scan('/data/folder')")
+    print("SQLiteHandler.analyze_scan_results(results)")
     print()
     print("# PostgreSQL - Environment-based connection")
     print("from qufe.dbhandler import PostgreSQLHandler")
@@ -893,3 +898,458 @@ class SQLiteHandler(BaseDBHandler):
 
         with cls(db_path) as db:
             return db.read_table(table_name, where=where)
+
+    # =========================================================
+    # Batch scanning methods for multiple databases
+    # =========================================================
+
+    @classmethod
+    def scan_databases(cls, folder_path: str,
+                      required_columns: Optional[List[str]] = None,
+                      pattern: str = '**/*.db',
+                      verbose: bool = True,
+                      jupyter_mode: bool = False) -> Dict[str, Any]:
+        """
+        Scan all SQLite databases in a folder for tables with specific columns.
+
+        Efficiently scans multiple database files to find tables containing
+        specified columns and counts their rows. Useful for data exploration
+        and migration planning.
+
+        Args:
+            folder_path: Directory path to scan for database files
+            required_columns: List of column names that tables must have
+                             (None means count all tables)
+            pattern: Glob pattern for finding database files (default: '**/*.db')
+            verbose: Display progress and statistics (default: True)
+            jupyter_mode: Enable Jupyter notebook display mode (default: False)
+
+        Returns:
+            Dictionary containing:
+            - total_rows: Total number of rows across all matching tables
+            - matching_tables: Count of tables with required columns
+            - processed_files: Number of successfully processed files
+            - error_files: Number of files with errors
+            - details: List of detailed information per file
+            - errors: List of error messages
+            - summary: Processing summary statistics
+
+        Example:
+            >>> # Basic usage - find tables with specific columns
+            >>> results = SQLiteHandler.scan_databases(
+            ...     folder_path='/data/databases',
+            ...     required_columns=['Column_A', 'Column_B'],
+            ...     verbose=True
+            ... )
+
+            >>> # Scan all tables in all databases
+            >>> results = SQLiteHandler.scan_databases(
+            ...     folder_path='/data',
+            ...     pattern='**/*.sqlite',
+            ...     required_columns=None
+            ... )
+
+            >>> # Jupyter notebook with progress tracking
+            >>> results = SQLiteHandler.scan_databases(
+            ...     folder_path='/data',
+            ...     required_columns=['user_id', 'created_at'],
+            ...     jupyter_mode=True
+            ... )
+        """
+        folder = Path(folder_path)
+
+        # Initialize results dictionary
+        results = {
+            'total_rows': 0,
+            'matching_tables': 0,
+            'processed_files': 0,
+            'error_files': 0,
+            'details': [],
+            'errors': [],
+            'summary': {}
+        }
+
+        start_time = time.time()
+
+        # Find all database files
+        if verbose:
+            print("🔍 Scanning for database files...")
+
+        db_files = list(folder.glob(pattern))
+        total_files = len(db_files)
+
+        if total_files == 0:
+            if verbose:
+                print(f"❌ No files matching pattern '{pattern}' found in {folder_path}")
+            results['summary'] = {
+                'elapsed_time': time.time() - start_time,
+                'files_found': 0
+            }
+            return results
+
+        if verbose:
+            print(f"📁 Found {total_files} database file(s)")
+            if required_columns:
+                print(f"📋 Looking for tables with columns: {required_columns}")
+            else:
+                print("📋 Counting all tables")
+            print("-" * 60)
+
+        # Try to use progress tracker if available
+        tracker = None
+        try:
+            from . import base as qb
+            if verbose:
+                tracker = qb.ProgressTracker(
+                    total=total_files,
+                    prefix="Scanning databases",
+                    jupyter_mode=jupyter_mode
+                )
+        except ImportError:
+            pass
+
+        # Process each database file
+        for file_idx, db_file in enumerate(db_files, 1):
+            file_info = {
+                'file': str(db_file),
+                'file_name': db_file.name,
+                'tables': [],
+                'file_total_rows': 0,
+                'file_size': db_file.stat().st_size
+            }
+
+            # Manual progress display if tracker not available
+            if verbose and not tracker and not jupyter_mode:
+                print(f"[{file_idx}/{total_files}] Processing: {db_file.name}")
+            elif verbose and jupyter_mode and not tracker:
+                # Simple jupyter progress without tracker
+                try:
+                    from IPython.display import clear_output
+                    clear_output(wait=True)
+                    print(f"Processing: {file_idx}/{total_files} - {db_file.name}")
+                    print(f"Progress: {(file_idx/total_files)*100:.1f}%")
+                except ImportError:
+                    print(f"[{file_idx}/{total_files}] Processing: {db_file.name}")
+
+            try:
+                with cls(db_file) as db:
+                    tables = db.get_tables()
+
+                    for table in tables:
+                        try:
+                            # Get column information
+                            schema_info = db.get_table_schema(table, verbose=False)
+                            columns = schema_info['columns']
+                            column_names = [col['name'] for col in columns]
+
+                            # Check if required columns exist (or count all if None)
+                            if required_columns is None:
+                                has_required = True
+                            else:
+                                has_required = all(
+                                    col in column_names for col in required_columns
+                                )
+
+                            if has_required:
+                                # Count rows
+                                count_query = f"SELECT COUNT(*) as cnt FROM {table}"
+                                count_result = db.execute_query(count_query)
+                                row_count = count_result[0]['cnt'] if count_result else 0
+
+                                table_info = {
+                                    'table': table,
+                                    'rows': row_count,
+                                    'columns': column_names,
+                                    'schema_method': schema_info['method'],
+                                    'schema_accuracy': schema_info['accuracy']
+                                }
+
+                                file_info['tables'].append(table_info)
+                                file_info['file_total_rows'] += row_count
+                                results['total_rows'] += row_count
+                                results['matching_tables'] += 1
+
+                        except Exception as e:
+                            error_msg = f"Table '{table}' in {db_file.name}: {str(e)}"
+                            results['errors'].append(error_msg)
+
+                    results['processed_files'] += 1
+
+                    # Store file info if it has matching tables
+                    if file_info['tables']:
+                        results['details'].append(file_info)
+
+            except Exception as e:
+                error_msg = f"File '{db_file.name}': {str(e)}"
+                results['errors'].append(error_msg)
+                results['error_files'] += 1
+
+            # Update progress
+            if tracker:
+                tracker.update(
+                    increment=1,
+                    item=db_file.name,
+                    error=None if file_info['tables'] else "No matching tables"
+                )
+
+        # Calculate summary statistics
+        elapsed_time = time.time() - start_time
+
+        results['summary'] = {
+            'elapsed_time': elapsed_time,
+            'elapsed_formatted': cls._format_time(elapsed_time),
+            'files_found': total_files,
+            'files_processed': results['processed_files'],
+            'files_with_matches': len(results['details']),
+            'average_time_per_file': elapsed_time / total_files if total_files > 0 else 0,
+            'total_size_bytes': sum(d['file_size'] for d in results['details']),
+            'rows_per_second': results['total_rows'] / elapsed_time if elapsed_time > 0 else 0
+        }
+
+        # Finish progress tracking
+        if tracker:
+            tracker.finish(show_summary=False)
+
+        # Display final summary
+        if verbose:
+            cls._display_scan_summary(results, required_columns)
+
+        return results
+
+    @classmethod
+    def _format_time(cls, seconds: float) -> str:
+        """Format seconds into human-readable time string."""
+        if seconds < 60:
+            return f"{seconds:.1f}초"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}분 {secs}초"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}시간 {minutes}분 {secs}초"
+
+    @classmethod
+    def _display_scan_summary(cls, results: Dict[str, Any],
+                             required_columns: Optional[List[str]] = None) -> None:
+        """
+        Display formatted summary of scan results.
+
+        Args:
+            results: Scan results dictionary
+            required_columns: List of required columns (for display)
+        """
+        print("\n" + "=" * 60)
+        print("📊 Scan Complete - Summary")
+        print("=" * 60)
+
+        summary = results['summary']
+
+        print(f"⏱️  Time elapsed: {summary.get('elapsed_formatted', summary['elapsed_time'])}")
+        print(f"📁 Files scanned: {summary['files_processed']}/{summary['files_found']}")
+        print(f"✅ Files with matches: {summary['files_with_matches']}")
+
+        if results['error_files'] > 0:
+            print(f"❌ Files with errors: {results['error_files']}")
+
+        print(f"\n📈 Data Statistics:")
+        print(f"   Total rows: {results['total_rows']:,}")
+        print(f"   Matching tables: {results['matching_tables']}")
+
+        total_size_mb = summary['total_size_bytes'] / (1024 * 1024)
+        print(f"   Total size: {total_size_mb:.2f} MB")
+
+        if summary['elapsed_time'] > 0:
+            print(f"   Processing speed: {summary['rows_per_second']:.0f} rows/sec")
+
+        # Suggest processing method based on data size
+        print("\n💡 Processing Recommendation:")
+        cls._suggest_processing_method(results['total_rows'])
+
+        # Show errors if any
+        if results['errors'] and len(results['errors']) <= 5:
+            print("\n⚠️  Errors encountered:")
+            for error in results['errors']:
+                print(f"   • {error}")
+        elif results['errors']:
+            print(f"\n⚠️  {len(results['errors'])} errors encountered (showing first 5):")
+            for error in results['errors'][:5]:
+                print(f"   • {error}")
+
+    @classmethod
+    def _suggest_processing_method(cls, total_rows: int) -> None:
+        """
+        Suggest data processing method based on row count.
+
+        Args:
+            total_rows: Total number of rows to process
+        """
+        if total_rows == 0:
+            print("   ⚠️  No data found")
+        elif total_rows < 100_000:
+            print(f"   🟢 In-memory processing recommended ({total_rows:,} rows)")
+            print("      → Load all data into memory for processing")
+        elif total_rows < 1_000_000:
+            print(f"   🟡 Batch processing recommended ({total_rows:,} rows)")
+            print("      → Process in chunks or use intermediate storage")
+        else:
+            print(f"   🔴 Streaming processing recommended ({total_rows:,} rows)")
+            print("      → Use generators or database-level operations")
+
+        # Estimate memory usage
+        estimated_mb = (total_rows * 100) / (1024 * 1024)  # Assume 100 bytes per row
+        print(f"   📏 Estimated memory usage: ~{estimated_mb:.1f} MB")
+
+    @classmethod
+    def analyze_scan_results(cls, results: Dict[str, Any],
+                            top_n: int = 10,
+                            sort_by: str = 'rows') -> None:
+        """
+        Analyze and display detailed scan results.
+
+        Args:
+            results: Results from scan_databases
+            top_n: Number of top files to show
+            sort_by: Sort criterion ('rows', 'tables', 'size')
+        """
+        if not results['details']:
+            print("No matching data found to analyze.")
+            return
+
+        print(f"\n📋 Top {top_n} Files by {sort_by}")
+        print("-" * 80)
+
+        # Sort files based on criterion
+        if sort_by == 'rows':
+            sorted_files = sorted(
+                results['details'],
+                key=lambda x: x['file_total_rows'],
+                reverse=True
+            )
+        elif sort_by == 'tables':
+            sorted_files = sorted(
+                results['details'],
+                key=lambda x: len(x['tables']),
+                reverse=True
+            )
+        elif sort_by == 'size':
+            sorted_files = sorted(
+                results['details'],
+                key=lambda x: x['file_size'],
+                reverse=True
+            )
+        else:
+            sorted_files = results['details']
+
+        # Display top files
+        for i, file_info in enumerate(sorted_files[:top_n], 1):
+            print(f"\n{i}. {file_info['file_name']}")
+            print(f"   📂 Path: {file_info['file']}")
+            print(f"   💾 Size: {file_info['file_size'] / 1024:.1f} KB")
+            print(f"   📊 Total rows: {file_info['file_total_rows']:,}")
+            print(f"   📋 Matching tables: {len(file_info['tables'])}")
+
+            # Show table details
+            for table_info in file_info['tables']:
+                accuracy_marker = ""
+                if table_info['schema_accuracy'] == 'low':
+                    accuracy_marker = " ⚠️"
+                elif table_info['schema_accuracy'] == 'medium':
+                    accuracy_marker = " ⚡"
+
+                print(f"      └─ {table_info['table']}: {table_info['rows']:,} rows{accuracy_marker}")
+
+    @classmethod
+    def export_scan_results(cls, results: Dict[str, Any],
+                           output_path: str,
+                           format: str = 'csv') -> None:
+        """
+        Export scan results to file.
+
+        Args:
+            results: Results from scan_databases
+            output_path: Output file path
+            format: Export format ('csv', 'json', 'pickle')
+        """
+        import json
+        import csv
+        import pickle
+
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if format == 'json':
+            with open(output_file, 'w') as f:
+                json.dump(results, f, indent=2, default=str)
+            print(f"Results exported to {output_file} (JSON)")
+
+        elif format == 'csv':
+            # Flatten data for CSV export
+            rows = []
+            for file_info in results['details']:
+                for table_info in file_info['tables']:
+                    rows.append({
+                        'file': file_info['file_name'],
+                        'file_path': file_info['file'],
+                        'file_size_kb': file_info['file_size'] / 1024,
+                        'table': table_info['table'],
+                        'rows': table_info['rows'],
+                        'columns': ', '.join(table_info['columns'][:10])  # First 10 columns
+                    })
+
+            if rows:
+                with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                    writer.writeheader()
+                    writer.writerows(rows)
+                print(f"Results exported to {output_file} (CSV)")
+            else:
+                print("No data to export")
+
+        elif format == 'pickle':
+            with open(output_file, 'wb') as f:
+                pickle.dump(results, f)
+            print(f"Results exported to {output_file} (Pickle)")
+
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+
+    @classmethod
+    def quick_scan(cls, folder_path: str, **kwargs) -> Dict[str, Any]:
+        """
+        Convenience method for quick database scanning.
+
+        Automatically detects Jupyter environment and enables appropriate
+        display mode for the best user experience.
+
+        Args:
+            folder_path: Directory path to scan
+            **kwargs: Additional arguments for scan_databases
+
+        Returns:
+            Scan results dictionary
+
+        Example:
+            >>> # Quick scan with automatic environment detection
+            >>> results = SQLiteHandler.quick_scan('/data/databases')
+
+            >>> # Quick scan with specific columns
+            >>> results = SQLiteHandler.quick_scan(
+            ...     '/data',
+            ...     required_columns=['column_a', 'column_b']
+            ... )
+        """
+        # Auto-detect Jupyter environment
+        try:
+            get_ipython()  # This is defined in IPython/Jupyter
+            jupyter_mode = True
+        except NameError:
+            jupyter_mode = False
+
+        # Set defaults for quick scanning
+        kwargs.setdefault('verbose', True)
+        kwargs.setdefault('jupyter_mode', jupyter_mode)
+
+        return cls.scan_databases(folder_path, **kwargs)

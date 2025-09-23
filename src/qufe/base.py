@@ -5,17 +5,17 @@ import re
 import socket
 import time
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 
 
 class TS:
     """Timestamp handling utility class with timezone support."""
-    
+
     def __init__(self, time_zone: str = 'Asia/Seoul'):
         """
         Initialize timestamp handler.
-        
+
         Args:
             time_zone: Timezone string (default: 'Asia/Seoul')
         """
@@ -26,13 +26,13 @@ class TS:
     def timestamp_to_datetime(self, timestamp) -> datetime:
         """
         Convert timestamp to datetime object with timezone.
-        
+
         Args:
             timestamp: Unix timestamp (int/float) or datetime object
-            
+
         Returns:
             datetime object with timezone or None if invalid input
-            
+
         Example:
             >>> ts = TS()
             >>> dt = ts.timestamp_to_datetime(1640995200)  # 2022-01-01 00:00:00 UTC
@@ -48,13 +48,13 @@ class TS:
     def get_ts_formatted(self, timestamp) -> str:
         """
         Get formatted timestamp string.
-        
+
         Args:
             timestamp: Unix timestamp or datetime object
-            
+
         Returns:
             Formatted timestamp string or None if invalid
-            
+
         Example:
             >>> ts = TS()
             >>> formatted = ts.get_ts_formatted(1640995200)
@@ -62,22 +62,308 @@ class TS:
         """
         if isinstance(timestamp, int | float):
             timestamp = self.timestamp_to_datetime(timestamp)
-        
+
         if isinstance(timestamp, datetime):
             return timestamp.strftime(self.time_format)
         else:
             return None
 
 
+# ============================================================================
+# Progress Bar Utilities
+# ============================================================================
+
+class ProgressBar:
+    """
+    Progress bar utility for visual feedback during long operations.
+
+    Supports both console and Jupyter notebook environments.
+    """
+
+    @staticmethod
+    def show_bar(current: int, total: int, prefix: str = "Progress",
+                 suffix: str = "", bar_length: int = 30,
+                 filled_char: str = "█", empty_char: str = "░") -> str:
+        """
+        Generate a text-based progress bar.
+
+        Args:
+            current: Current progress value
+            total: Total value for completion
+            prefix: Text to display before the bar
+            suffix: Text to display after the bar
+            bar_length: Length of the progress bar in characters
+            filled_char: Character for filled portion
+            empty_char: Character for empty portion
+
+        Returns:
+            Formatted progress bar string
+
+        Example:
+            >>> bar = ProgressBar.show_bar(30, 100, prefix="Processing")
+            >>> print(bar)
+            Processing: [█████████░░░░░░░░░░░░░░░░░░░░░] 30.0% (30/100)
+        """
+        if total == 0:
+            return f"{prefix}: [{empty_char * bar_length}] 0.0% (0/0) {suffix}"
+
+        percent = (current / total) * 100
+        filled = int(bar_length * current / total)
+        bar = filled_char * filled + empty_char * (bar_length - filled)
+
+        result = f"{prefix}: [{bar}] {percent:.1f}% ({current}/{total})"
+        if suffix:
+            result += f" {suffix}"
+
+        return result
+
+    @staticmethod
+    def show_spinner(current: int, prefix: str = "Processing",
+                     suffix: str = "") -> str:
+        """
+        Generate a simple spinner animation.
+
+        Args:
+            current: Current iteration count
+            prefix: Text before spinner
+            suffix: Text after spinner
+
+        Returns:
+            Formatted spinner string
+
+        Example:
+            >>> for i in range(10):
+            ...     spinner = ProgressBar.show_spinner(i, "Loading")
+            ...     print(f"\r{spinner}", end="")
+        """
+        spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        spinner = spinners[current % len(spinners)]
+
+        result = f"{prefix} {spinner}"
+        if suffix:
+            result += f" {suffix}"
+
+        return result
+
+    @staticmethod
+    def update_display(content: str, jupyter_mode: bool = False,
+                       clear: bool = True) -> None:
+        """
+        Update display with content, supporting both console and Jupyter.
+
+        Args:
+            content: Content to display
+            jupyter_mode: Whether running in Jupyter environment
+            clear: Whether to clear previous output
+
+        Example:
+            >>> for i in range(100):
+            ...     bar = ProgressBar.show_bar(i, 100)
+            ...     ProgressBar.update_display(bar, jupyter_mode=True)
+        """
+        if jupyter_mode:
+            try:
+                from IPython.display import clear_output, display
+                if clear:
+                    clear_output(wait=True)
+                print(content)
+            except ImportError:
+                # Fallback to console mode if IPython not available
+                if clear:
+                    print(f"\r{content}", end="", flush=True)
+                else:
+                    print(content)
+        else:
+            if clear:
+                # Console mode with carriage return
+                print(f"\r{content}", end="", flush=True)
+            else:
+                print(content)
+
+    @staticmethod
+    def format_time(seconds: float) -> str:
+        """
+        Format seconds into human-readable time string.
+
+        Args:
+            seconds: Time in seconds
+
+        Returns:
+            Formatted time string
+
+        Example:
+            >>> ProgressBar.format_time(125.5)
+            '2분 5초'
+            >>> ProgressBar.format_time(3665)
+            '1시간 1분 5초'
+        """
+        if seconds < 60:
+            return f"{seconds:.1f}초"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}분 {secs}초"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            return f"{hours}시간 {minutes}분 {secs}초"
+
+    @staticmethod
+    def estimate_remaining(current: int, total: int,
+                           elapsed_seconds: float) -> Optional[float]:
+        """
+        Estimate remaining time based on current progress.
+
+        Args:
+            current: Current progress value
+            total: Total value for completion
+            elapsed_seconds: Elapsed time in seconds
+
+        Returns:
+            Estimated remaining time in seconds or None
+
+        Example:
+            >>> remaining = ProgressBar.estimate_remaining(30, 100, 15.0)
+            >>> print(f"Remaining: {ProgressBar.format_time(remaining)}")
+        """
+        if current == 0 or total == 0:
+            return None
+
+        rate = current / elapsed_seconds
+        remaining_items = total - current
+
+        if rate > 0:
+            return remaining_items / rate
+        else:
+            return None
+
+
+class ProgressTracker:
+    """
+    Advanced progress tracking with statistics and time estimation.
+    """
+
+    def __init__(self, total: int, prefix: str = "Progress",
+                 jupyter_mode: bool = False, bar_length: int = 30):
+        """
+        Initialize progress tracker.
+
+        Args:
+            total: Total number of items to process
+            prefix: Prefix text for progress bar
+            jupyter_mode: Whether in Jupyter environment
+            bar_length: Length of progress bar
+        """
+        self.total = total
+        self.current = 0
+        self.prefix = prefix
+        self.jupyter_mode = jupyter_mode
+        self.bar_length = bar_length
+        self.start_time = time.time()
+        self.errors = []
+        self.completed_items = []
+
+    def update(self, increment: int = 1, item: Any = None,
+               error: Optional[str] = None) -> None:
+        """
+        Update progress with optional item tracking.
+
+        Args:
+            increment: Amount to increment progress
+            item: Item that was processed (optional)
+            error: Error message if processing failed (optional)
+        """
+        self.current += increment
+
+        if error:
+            self.errors.append(error)
+        elif item is not None:
+            self.completed_items.append(item)
+
+        self._display_progress()
+
+    def _display_progress(self) -> None:
+        """Display current progress with statistics."""
+        elapsed = time.time() - self.start_time
+
+        # Generate progress bar
+        bar = ProgressBar.show_bar(
+            self.current, self.total,
+            prefix=self.prefix,
+            bar_length=self.bar_length
+        )
+
+        # Add time information
+        elapsed_str = ProgressBar.format_time(elapsed)
+        remaining = ProgressBar.estimate_remaining(
+            self.current, self.total, elapsed
+        )
+
+        content = [bar]
+        content.append(f"경과 시간: {elapsed_str}")
+
+        if remaining:
+            remaining_str = ProgressBar.format_time(remaining)
+            content.append(f"예상 남은 시간: {remaining_str}")
+
+        if self.errors:
+            content.append(f"오류: {len(self.errors)}건")
+
+        # Update display
+        display_content = "\n".join(content)
+        ProgressBar.update_display(
+            display_content,
+            jupyter_mode=self.jupyter_mode
+        )
+
+    def finish(self, show_summary: bool = True) -> Dict[str, Any]:
+        """
+        Finish tracking and return summary.
+
+        Args:
+            show_summary: Whether to display summary
+
+        Returns:
+            Dictionary with tracking statistics
+        """
+        elapsed = time.time() - self.start_time
+
+        summary = {
+            'total': self.total,
+            'completed': self.current,
+            'errors': len(self.errors),
+            'elapsed_time': elapsed,
+            'elapsed_formatted': ProgressBar.format_time(elapsed),
+            'items_per_second': self.current / elapsed if elapsed > 0 else 0,
+            'error_details': self.errors,
+            'completed_items': self.completed_items
+        }
+
+        if show_summary:
+            print()  # New line after progress bar
+            print("=" * 50)
+            print("작업 완료 요약")
+            print("=" * 50)
+            print(f"처리 항목: {summary['completed']}/{summary['total']}")
+            print(f"소요 시간: {summary['elapsed_formatted']}")
+            print(f"처리 속도: {summary['items_per_second']:.2f} items/sec")
+
+            if summary['errors']:
+                print(f"오류 발생: {summary['errors']}건")
+
+        return summary
+
+
 def diff_codes(left: str, right: str, mode: int = 0):
     """
     Compare two code strings with different diff formats.
-    
+
     Args:
         left: Left code string to compare
-        right: Right code string to compare  
+        right: Right code string to compare
         mode: Comparison mode (0=simple, 1=unified, 2=ndiff)
-        
+
     Example:
         >>> diff_codes("line1\nline2", "line1\nmodified", mode=1)
     """
@@ -97,11 +383,11 @@ def diff_codes(left: str, right: str, mode: int = 0):
             # Handle different line counts
             if len(left_lines) > len(right_lines):
                 print("Additional lines in left code:")
-                for i, l in enumerate(left_lines[len(right_lines):], start=len(right_lines)+1):
+                for i, l in enumerate(left_lines[len(right_lines):], start=len(right_lines) + 1):
                     print(f"Line {i}: {l}")
             elif len(right_lines) > len(left_lines):
                 print("Additional lines in right code:")
-                for i, r in enumerate(right_lines[len(left_lines):], start=len(left_lines)+1):
+                for i, r in enumerate(right_lines[len(left_lines):], start=len(left_lines) + 1):
                     print(f"Line {i}: {r}")
         case 1:
             print("\n=== unified mode ===\n")
@@ -120,49 +406,49 @@ def diff_codes(left: str, right: str, mode: int = 0):
         case _:
             print("Unsupported mode. Please choose 0 (simple), 1 (unified), or 2 (ndiff).")
 
- 
+
 def import_script(script_name: str, script_path: str):
     """
     Dynamically import a Python module from file path.
-    
+
     Args:
         script_name: Name for the imported module
         script_path: Path to the Python file to import
-        
+
     Returns:
         Imported module object
-        
+
     Example:
         >>> module = import_script("my_module", "/path/to/script.py")
         >>> module.some_function()
     """
     module_spec = ut.spec_from_file_location(script_name, script_path)
     module = ut.module_from_spec(module_spec)
- 
+
     module_dir = os.path.dirname(script_path)
     prev_cwd = os.getcwd()
     os.chdir(module_dir)
- 
+
     try:
         module_spec.loader.exec_module(module)
     finally:
         os.chdir(prev_cwd)
- 
+
     return module
 
 
 def flatten(lst, max_depth=1, current_depth=0):
     """
     Flatten nested lists up to a specified depth.
-    
+
     Args:
         lst: The list to flatten
         max_depth: Maximum depth to flatten (default: 1)
         current_depth: Current recursion depth (internal use)
-        
+
     Returns:
         Flattened list
-        
+
     Example:
         >>> flatten([1, [2, [3, 4], 5], [6, 7], 8])
         [1, 2, 3, 4, 5, 6, 7, 8]
@@ -179,15 +465,15 @@ def flatten(lst, max_depth=1, current_depth=0):
 def flatten_gen(lst, max_depth=1, current_depth=0):
     """
     Flatten nested lists using generator (memory efficient).
-    
+
     Args:
         lst: The list to flatten
         max_depth: Maximum depth to flatten (default: 1)
         current_depth: Current recursion depth (internal use)
-        
+
     Yields:
         Flattened items one by one
-        
+
     Example:
         >>> list(flatten_gen([1, [2, [3, [4]], 5]]))
         [1, 2, 3, 4, 5]
@@ -202,15 +488,15 @@ def flatten_gen(lst, max_depth=1, current_depth=0):
 def flatten_any(nested, max_depth=1, current_depth=0):
     """
     Flatten nested collections (list, tuple, set) up to specified depth.
-    
+
     Args:
         nested: The nested collection to flatten
         max_depth: Maximum depth to flatten (default: 1)
         current_depth: Current recursion depth (internal use)
-        
+
     Yields:
         Flattened items one by one
-        
+
     Example:
         >>> list(flatten_any([1, (2, [3, {4, 5}])]))
         [1, 2, 3, 4, 5]  # Order may vary for set items
@@ -226,13 +512,13 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
     """
     Flatten 3-level nested dictionary by merging level2 into level1
     with suffix notation for original parent keys.
-    
+
     Args:
         nested_dict: 3-level nested dictionary
-        
+
     Returns:
         Flattened dictionary with suffix notation
-        
+
     Example:
         >>> data = {'A': {'x': 1, 'y': {'p': 10, 'q': 20}, 'z': 3}}
         >>> flatten_three_levels_with_suffix(data)
@@ -243,7 +529,7 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
         if not isinstance(level1, dict):
             result[top_key] = level1
             continue
-    
+
         merged = {}
         for (k1, v1) in level1.items():
             if isinstance(v1, dict):
@@ -253,14 +539,14 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
                     merged[new_key] = v2
             else:
                 merged[k1] = v1
-    
+
         result[top_key] = merged
-    
+
     return result
 
 
 # ============================================================================
-# Network Utilities
+# Network Utilities (WOL remains unchanged)
 # ============================================================================
 
 
