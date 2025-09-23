@@ -408,17 +408,276 @@ class SQLiteHandler(BaseDBHandler):
 
     def get_table_info(self, table_name: str) -> List[Dict[str, Any]]:
         """
-        Get column information for a table.
+        Get column information for a table with multiple fallback methods.
+
+        Tries multiple approaches in order:
+        1. PRAGMA table_info (standard SQLite metadata)
+        2. Parse CREATE TABLE statement from sqlite_master
+        3. Infer from sample data using cursor.description
 
         Args:
             table_name: Name of the table
 
         Returns:
-            List of column information dictionaries
+            List of column information dictionaries with keys:
+            - cid: Column ID (position)
+            - name: Column name
+            - type: Data type (may be 'UNKNOWN' if inferred)
+            - notnull: Whether NOT NULL constraint exists (0 or 1)
+            - dflt_value: Default value
+            - pk: Whether primary key (0 or 1)
         """
-        query = f"PRAGMA table_info({table_name})"
-        results = self.execute_query(query)
-        return [dict(row) for row in results]
+        # Method 1: Try PRAGMA table_info (standard approach)
+        try:
+            query = f"PRAGMA table_info({table_name})"
+            results = self.execute_query(query)
+            if results:
+                return [dict(row) for row in results]
+        except Exception:
+            # PRAGMA might not be available in some environments
+            pass
+
+        # Method 2: Parse CREATE TABLE statement
+        try:
+            schema_info = self._get_schema_from_master(table_name)
+            if schema_info:
+                return schema_info
+        except Exception:
+            pass
+
+        # Method 3: Infer from sample data
+        try:
+            sample_info = self._infer_from_sample(table_name)
+            if sample_info:
+                return sample_info
+        except Exception:
+            pass
+
+        # If all methods fail, return minimal info if table exists
+        if self.table_exists(table_name):
+            return [{
+                'cid': 0,
+                'name': 'unknown',
+                'type': 'UNKNOWN',
+                'notnull': 0,
+                'dflt_value': None,
+                'pk': 0
+            }]
+
+        return []
+
+    def _get_schema_from_master(self, table_name: str) -> List[Dict[str, Any]]:
+        """
+        Extract column information from sqlite_master CREATE TABLE statement.
+
+        Args:
+            table_name: Name of the table
+
+        Returns:
+            List of column information or empty list
+        """
+        query = """
+                SELECT sql \
+                FROM sqlite_master
+                WHERE type ='table' AND name =? \
+                """
+        results = self.execute_query(query, (table_name,))
+
+        if not results or not results[0]['sql']:
+            return []
+
+        create_sql = results[0]['sql']
+
+        # Basic parsing of CREATE TABLE statement
+        # This is a simplified parser - production code might need more robust parsing
+        columns = []
+
+        # Extract content between parentheses
+        import re
+        match = re.search(r'\((.*)\)', create_sql, re.DOTALL)
+        if not match:
+            return []
+
+        column_defs = match.group(1)
+        # Split by comma but not within parentheses (for complex constraints)
+        parts = re.split(r',(?![^()]*\))', column_defs)
+
+        for idx, part in enumerate(parts):
+            part = part.strip()
+            if not part:
+                continue
+
+            # Skip constraint definitions (PRIMARY KEY, FOREIGN KEY, etc.)
+            if part.upper().startswith(('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK', 'CONSTRAINT')):
+                continue
+
+            # Extract column name and type
+            tokens = part.split()
+            if len(tokens) >= 2:
+                col_name = tokens[0].strip('`"[]')
+                col_type = tokens[1].upper() if len(tokens) > 1 else 'TEXT'
+
+                # Check for constraints
+                part_upper = part.upper()
+                is_pk = 'PRIMARY KEY' in part_upper
+                is_notnull = 'NOT NULL' in part_upper
+
+                # Extract default value if present
+                default_match = re.search(r'DEFAULT\s+([^\s,]+)', part, re.IGNORECASE)
+                default_val = default_match.group(1) if default_match else None
+
+                columns.append({
+                    'cid': idx,
+                    'name': col_name,
+                    'type': col_type,
+                    'notnull': 1 if is_notnull else 0,
+                    'dflt_value': default_val,
+                    'pk': 1 if is_pk else 0
+                })
+
+        return columns
+
+    def _infer_from_sample(self, table_name: str) -> List[Dict[str, Any]]:
+        """
+        Infer column information from sample data.
+
+        Uses cursor.description after executing a SELECT query.
+        Note: Data types and constraints cannot be accurately determined this way.
+
+        Args:
+            table_name: Name of the table
+
+        Returns:
+            List of column information with limited accuracy
+        """
+        # Use LIMIT 0 to get column info without fetching data
+        query = f"SELECT * FROM {table_name} LIMIT 0"
+        cursor = self.connection.cursor()
+        cursor.execute(query)
+
+        if not cursor.description:
+            return []
+
+        columns = []
+        for idx, col_desc in enumerate(cursor.description):
+            # cursor.description is a tuple: (name, type_code, display_size, internal_size, precision, scale, null_ok)
+            # For SQLite, most of these are None except name
+            columns.append({
+                'cid': idx,
+                'name': col_desc[0],
+                'type': 'UNKNOWN',  # Cannot reliably determine from cursor
+                'notnull': 0,  # Cannot determine from cursor
+                'dflt_value': None,  # Cannot determine from cursor
+                'pk': 0  # Cannot determine from cursor
+            })
+
+        # Try to enhance with actual data type inference if table has data
+        try:
+            sample_query = f"SELECT * FROM {table_name} LIMIT 1"
+            sample_results = self.execute_query(sample_query)
+
+            if sample_results and len(sample_results) > 0:
+                sample_row = dict(sample_results[0])
+
+                for col in columns:
+                    col_name = col['name']
+                    if col_name in sample_row:
+                        value = sample_row[col_name]
+                        # Basic type inference from sample value
+                        if value is None:
+                            pass  # Keep UNKNOWN
+                        elif isinstance(value, int):
+                            col['type'] = 'INTEGER'
+                        elif isinstance(value, float):
+                            col['type'] = 'REAL'
+                        elif isinstance(value, bytes):
+                            col['type'] = 'BLOB'
+                        elif isinstance(value, str):
+                            col['type'] = 'TEXT'
+        except Exception:
+            # If sampling fails, return basic column info
+            pass
+
+        return columns
+
+    def get_table_schema(self, table_name: str, verbose: bool = False) -> Dict[str, Any]:
+        """
+        Get comprehensive table schema information.
+
+        Provides detailed information about table structure including
+        the method used to obtain the information.
+
+        Args:
+            table_name: Name of the table
+            verbose: Whether to include additional diagnostic info
+
+        Returns:
+            Dictionary containing:
+            - columns: List of column information
+            - method: Method used to obtain info ('pragma', 'schema', 'inferred')
+            - accuracy: Confidence level ('high', 'medium', 'low')
+            - warnings: List of any warnings
+        """
+        result = {
+            'columns': [],
+            'method': None,
+            'accuracy': None,
+            'warnings': []
+        }
+
+        # Try PRAGMA first (most accurate)
+        try:
+            query = f"PRAGMA table_info({table_name})"
+            pragma_results = self.execute_query(query)
+            if pragma_results:
+                result['columns'] = [dict(row) for row in pragma_results]
+                result['method'] = 'pragma'
+                result['accuracy'] = 'high'
+                if verbose:
+                    print(f"✓ Retrieved schema via PRAGMA for table '{table_name}'")
+                return result
+        except Exception as e:
+            if verbose:
+                print(f"✗ PRAGMA failed: {e}")
+            result['warnings'].append("PRAGMA table_info not available")
+
+        # Try parsing CREATE TABLE
+        try:
+            schema_info = self._get_schema_from_master(table_name)
+            if schema_info:
+                result['columns'] = schema_info
+                result['method'] = 'schema'
+                result['accuracy'] = 'medium'
+                result['warnings'].append("Schema parsed from CREATE TABLE statement")
+                if verbose:
+                    print(f"✓ Retrieved schema via sqlite_master for table '{table_name}'")
+                return result
+        except Exception as e:
+            if verbose:
+                print(f"✗ Schema parsing failed: {e}")
+
+        # Fall back to inference
+        try:
+            sample_info = self._infer_from_sample(table_name)
+            if sample_info:
+                result['columns'] = sample_info
+                result['method'] = 'inferred'
+                result['accuracy'] = 'low'
+                result['warnings'].append("Column types inferred from data - constraints unknown")
+                if verbose:
+                    print(f"⚠ Schema inferred from sample data for table '{table_name}'")
+                return result
+        except Exception as e:
+            if verbose:
+                print(f"✗ Sample inference failed: {e}")
+
+        # Table might not exist or is inaccessible
+        if not self.table_exists(table_name):
+            result['warnings'].append(f"Table '{table_name}' does not exist")
+        else:
+            result['warnings'].append("Unable to retrieve schema information")
+
+        return result
 
     def table_exists(self, table_name: str) -> bool:
         """
