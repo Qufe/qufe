@@ -193,21 +193,21 @@ class ProgressBar:
 
         Example:
             >>> ProgressBar.format_time(125.5)
-            '2분 5초'
+            '2m 5s'
             >>> ProgressBar.format_time(3665)
-            '1시간 1분 5초'
+            '1h 1m 5s'
         """
         if seconds < 60:
-            return f"{seconds:.1f}초"
+            return f"{seconds:.1f}s"
         elif seconds < 3600:
             minutes = int(seconds // 60)
             secs = int(seconds % 60)
-            return f"{minutes}분 {secs}초"
+            return f"{minutes}m {secs}s"
         else:
             hours = int(seconds // 3600)
             minutes = int((seconds % 3600) // 60)
             secs = int(seconds % 60)
-            return f"{hours}시간 {minutes}분 {secs}초"
+            return f"{hours}h {minutes}m {secs}s"
 
     @staticmethod
     def estimate_remaining(current: int, total: int,
@@ -242,10 +242,13 @@ class ProgressBar:
 class ProgressTracker:
     """
     Advanced progress tracking with statistics and time estimation.
+
+    Supports status messages for richer feedback during processing.
     """
 
     def __init__(self, total: int, prefix: str = "Progress",
-                 jupyter_mode: bool = False, bar_length: int = 30):
+                 jupyter_mode: bool = False, bar_length: int = 30,
+                 show_status: bool = True):
         """
         Initialize progress tracker.
 
@@ -254,37 +257,46 @@ class ProgressTracker:
             prefix: Prefix text for progress bar
             jupyter_mode: Whether in Jupyter environment
             bar_length: Length of progress bar
+            show_status: Whether to display status messages
         """
         self.total = total
         self.current = 0
         self.prefix = prefix
         self.jupyter_mode = jupyter_mode
         self.bar_length = bar_length
+        self.show_status = show_status
         self.start_time = time.time()
         self.errors = []
         self.completed_items = []
+        self.statuses = []  # Track status messages
+        self.current_status = None  # Current status to display
 
     def update(self, increment: int = 1, item: Any = None,
-               error: Optional[str] = None) -> None:
+               error: Optional[str] = None, status: Optional[str] = None) -> None:
         """
-        Update progress with optional item tracking.
+        Update progress with optional item tracking and status message.
 
         Args:
             increment: Amount to increment progress
             item: Item that was processed (optional)
             error: Error message if processing failed (optional)
+            status: Status message to display (optional)
         """
         self.current += increment
 
         if error:
-            self.errors.append(error)
+            self.errors.append({'item': item, 'error': error})
         elif item is not None:
             self.completed_items.append(item)
+
+        if status is not None:
+            self.statuses.append({'item': item, 'status': status})
+            self.current_status = status
 
         self._display_progress()
 
     def _display_progress(self) -> None:
-        """Display current progress with statistics."""
+        """Display current progress with statistics and status."""
         elapsed = time.time() - self.start_time
 
         # Generate progress bar
@@ -294,21 +306,28 @@ class ProgressTracker:
             bar_length=self.bar_length
         )
 
+        # Build content lines
+        content = [bar]
+
+        # Add current status if available
+        if self.show_status and self.current_status:
+            content.append(f"Status: {self.current_status}")
+
         # Add time information
         elapsed_str = ProgressBar.format_time(elapsed)
+        content.append(f"Elapsed: {elapsed_str}")
+
+        # Add remaining time estimate
         remaining = ProgressBar.estimate_remaining(
             self.current, self.total, elapsed
         )
-
-        content = [bar]
-        content.append(f"경과 시간: {elapsed_str}")
-
         if remaining:
             remaining_str = ProgressBar.format_time(remaining)
-            content.append(f"예상 남은 시간: {remaining_str}")
+            content.append(f"Remaining: {remaining_str}")
 
+        # Add error count if any
         if self.errors:
-            content.append(f"오류: {len(self.errors)}건")
+            content.append(f"Errors: {len(self.errors)}")
 
         # Update display
         display_content = "\n".join(content)
@@ -316,6 +335,29 @@ class ProgressTracker:
             display_content,
             jupyter_mode=self.jupyter_mode
         )
+
+    def get_status_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of all status messages.
+
+        Returns:
+            Dictionary with status statistics
+        """
+        if not self.statuses:
+            return {}
+
+        # Count status types
+        status_counts = {}
+        for status_entry in self.statuses:
+            status_msg = status_entry['status']
+            status_counts[status_msg] = status_counts.get(status_msg, 0) + 1
+
+        return {
+            'total_statuses': len(self.statuses),
+            'unique_statuses': len(status_counts),
+            'status_counts': status_counts,
+            'recent_statuses': self.statuses[-5:]  # Last 5 statuses
+        }
 
     def finish(self, show_summary: bool = True) -> Dict[str, Any]:
         """
@@ -325,7 +367,7 @@ class ProgressTracker:
             show_summary: Whether to display summary
 
         Returns:
-            Dictionary with tracking statistics
+            Dictionary with tracking statistics including status summary
         """
         elapsed = time.time() - self.start_time
 
@@ -337,20 +379,32 @@ class ProgressTracker:
             'elapsed_formatted': ProgressBar.format_time(elapsed),
             'items_per_second': self.current / elapsed if elapsed > 0 else 0,
             'error_details': self.errors,
-            'completed_items': self.completed_items
+            'completed_items': self.completed_items,
+            'status_summary': self.get_status_summary()  # Add status summary
         }
 
         if show_summary:
             print()  # New line after progress bar
             print("=" * 50)
-            print("작업 완료 요약")
+            print("Completion Summary")
             print("=" * 50)
-            print(f"처리 항목: {summary['completed']}/{summary['total']}")
-            print(f"소요 시간: {summary['elapsed_formatted']}")
-            print(f"처리 속도: {summary['items_per_second']:.2f} items/sec")
+            print(f"Processed: {summary['completed']}/{summary['total']}")
+            print(f"Time taken: {summary['elapsed_formatted']}")
+            print(f"Processing rate: {summary['items_per_second']:.2f} items/sec")
+
+            # Show status summary if available
+            if summary['status_summary'] and summary['status_summary'].get('status_counts'):
+                print("\nResults by status:")
+                for status, count in summary['status_summary']['status_counts'].items():
+                    print(f"  • {status}: {count}")
 
             if summary['errors']:
-                print(f"오류 발생: {summary['errors']}건")
+                print(f"\nErrors: {summary['errors']}")
+                # Show first few errors
+                for i, error_entry in enumerate(summary['error_details'][:3]):
+                    print(f"  - {error_entry['item']}: {error_entry['error']}")
+                if len(summary['error_details']) > 3:
+                    print(f"  ... and {len(summary['error_details']) - 3} more")
 
         return summary
 
@@ -546,7 +600,7 @@ def flatten_three_levels_with_suffix(nested_dict: dict) -> dict:
 
 
 # ============================================================================
-# Network Utilities (WOL remains unchanged)
+# Network Utilities (WOL)
 # ============================================================================
 
 

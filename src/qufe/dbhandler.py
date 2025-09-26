@@ -905,10 +905,10 @@ class SQLiteHandler(BaseDBHandler):
 
     @classmethod
     def scan_databases(cls, folder_path: str,
-                      required_columns: Optional[List[str]] = None,
-                      pattern: str = '**/*.db',
-                      verbose: bool = True,
-                      jupyter_mode: bool = False) -> Dict[str, Any]:
+                       required_columns: Optional[List[str]] = None,
+                       pattern: str = '**/*.db',
+                       verbose: bool = True,
+                       jupyter_mode: bool = False) -> Dict[str, Any]:
         """
         Scan all SQLite databases in a folder for tables with specific columns.
 
@@ -928,6 +928,7 @@ class SQLiteHandler(BaseDBHandler):
             Dictionary containing:
             - total_rows: Total number of rows across all matching tables
             - matching_tables: Count of tables with required columns
+            - total_tables_scanned: Total number of tables examined
             - processed_files: Number of successfully processed files
             - error_files: Number of files with errors
             - details: List of detailed information per file
@@ -958,10 +959,11 @@ class SQLiteHandler(BaseDBHandler):
         """
         folder = Path(folder_path)
 
-        # Initialize results dictionary
+        # Initialize results dictionary with additional fields
         results = {
-            'total_rows': 0,
-            'matching_tables': 0,
+            'total_rows': 0,  # Rows in matching tables only
+            'matching_tables': 0,  # Tables with required columns
+            'total_tables_scanned': 0,  # All tables examined
             'processed_files': 0,
             'error_files': 0,
             'details': [],
@@ -1014,7 +1016,10 @@ class SQLiteHandler(BaseDBHandler):
                 'file': str(db_file),
                 'file_name': db_file.name,
                 'tables': [],
-                'file_total_rows': 0,
+                'file_total_rows': 0,  # Rows in matching tables
+                'file_total_rows_all': 0,  # Rows in all tables
+                'file_matching_tables': 0,  # Number of matching tables
+                'file_total_tables': 0,  # Total tables in file
                 'file_size': db_file.stat().st_size
             }
 
@@ -1027,13 +1032,14 @@ class SQLiteHandler(BaseDBHandler):
                     from IPython.display import clear_output
                     clear_output(wait=True)
                     print(f"Processing: {file_idx}/{total_files} - {db_file.name}")
-                    print(f"Progress: {(file_idx/total_files)*100:.1f}%")
+                    print(f"Progress: {(file_idx / total_files) * 100:.1f}%")
                 except ImportError:
                     print(f"[{file_idx}/{total_files}] Processing: {db_file.name}")
 
             try:
                 with cls(db_file) as db:
                     tables = db.get_tables()
+                    file_info['file_total_tables'] = len(tables)
 
                     for table in tables:
                         try:
@@ -1050,22 +1056,30 @@ class SQLiteHandler(BaseDBHandler):
                                     col in column_names for col in required_columns
                                 )
 
+                            # Count rows for all tables
+                            count_query = f"SELECT COUNT(*) as cnt FROM {table}"
+                            count_result = db.execute_query(count_query)
+                            row_count = count_result[0]['cnt'] if count_result else 0
+
+                            # Create table info with column_matched field
+                            table_info = {
+                                'table': table,
+                                'rows': row_count,
+                                'columns': column_names,
+                                'column_matched': has_required,  # New field indicating match status
+                                'schema_method': schema_info['method'],
+                                'schema_accuracy': schema_info['accuracy']
+                            }
+
+                            # Always add table info
+                            file_info['tables'].append(table_info)
+                            file_info['file_total_rows_all'] += row_count
+                            results['total_tables_scanned'] += 1
+
+                            # Update matching statistics only if columns match
                             if has_required:
-                                # Count rows
-                                count_query = f"SELECT COUNT(*) as cnt FROM {table}"
-                                count_result = db.execute_query(count_query)
-                                row_count = count_result[0]['cnt'] if count_result else 0
-
-                                table_info = {
-                                    'table': table,
-                                    'rows': row_count,
-                                    'columns': column_names,
-                                    'schema_method': schema_info['method'],
-                                    'schema_accuracy': schema_info['accuracy']
-                                }
-
-                                file_info['tables'].append(table_info)
                                 file_info['file_total_rows'] += row_count
+                                file_info['file_matching_tables'] += 1
                                 results['total_rows'] += row_count
                                 results['matching_tables'] += 1
 
@@ -1075,35 +1089,57 @@ class SQLiteHandler(BaseDBHandler):
 
                     results['processed_files'] += 1
 
-                    # Store file info if it has matching tables
-                    if file_info['tables']:
-                        results['details'].append(file_info)
+                    # Always store file info, even if no matching tables
+                    results['details'].append(file_info)
 
             except Exception as e:
                 error_msg = f"File '{db_file.name}': {str(e)}"
                 results['errors'].append(error_msg)
                 results['error_files'] += 1
 
-            # Update progress
+            # Update progress with more accurate feedback
             if tracker:
+                # Determine status message
+                if file_info['file_total_tables'] == 0:
+                    status_msg = "No tables found"
+                elif required_columns:
+                    if file_info['file_matching_tables'] == 0:
+                        status_msg = f"No matches (scanned {file_info['file_total_tables']} tables)"
+                    else:
+                        status_msg = f"Found {file_info['file_matching_tables']}/{file_info['file_total_tables']} matching"
+                else:
+                    status_msg = f"Found {file_info['file_total_tables']} tables"
+
                 tracker.update(
                     increment=1,
                     item=db_file.name,
-                    error=None if file_info['tables'] else "No matching tables"
+                    status=status_msg  # Pass status message to tracker
                 )
 
         # Calculate summary statistics
         elapsed_time = time.time() - start_time
+
+        # Count files with/without matching tables
+        files_with_matches = sum(1 for d in results['details']
+                                 if d.get('file_matching_tables', 0) > 0)
+
+        # Calculate total rows across all tables (not just matching)
+        total_rows_all = sum(d.get('file_total_rows_all', 0)
+                             for d in results['details'])
 
         results['summary'] = {
             'elapsed_time': elapsed_time,
             'elapsed_formatted': cls._format_time(elapsed_time),
             'files_found': total_files,
             'files_processed': results['processed_files'],
-            'files_with_matches': len(results['details']),
+            'files_with_matches': files_with_matches,
+            'files_without_matches': results['processed_files'] - files_with_matches,
             'average_time_per_file': elapsed_time / total_files if total_files > 0 else 0,
             'total_size_bytes': sum(d['file_size'] for d in results['details']),
-            'rows_per_second': results['total_rows'] / elapsed_time if elapsed_time > 0 else 0
+            'rows_per_second': results['total_rows'] / elapsed_time if elapsed_time > 0 else 0,
+            'total_rows_all_tables': total_rows_all,
+            'match_rate': (results['matching_tables'] / results['total_tables_scanned'] * 100)
+            if results['total_tables_scanned'] > 0 else 0
         }
 
         # Finish progress tracking
@@ -1133,7 +1169,7 @@ class SQLiteHandler(BaseDBHandler):
 
     @classmethod
     def _display_scan_summary(cls, results: Dict[str, Any],
-                             required_columns: Optional[List[str]] = None) -> None:
+                              required_columns: Optional[List[str]] = None) -> None:
         """
         Display formatted summary of scan results.
 
@@ -1148,18 +1184,31 @@ class SQLiteHandler(BaseDBHandler):
         summary = results['summary']
 
         print(f"⏱️  Time elapsed: {summary.get('elapsed_formatted', summary['elapsed_time'])}")
-        print(f"📁 Files scanned: {summary['files_processed']}/{summary['files_found']}")
-        print(f"✅ Files with matches: {summary['files_with_matches']}")
+        print(f"📁 Files scanned: {results['processed_files']}/{summary['files_found']}")
+
+        # Display match statistics
+        if required_columns:
+            print(f"✅ Files with matching tables: {summary['files_with_matches']}")
+            print(f"➖ Files without matching tables: {summary['files_without_matches']}")
+        else:
+            print(f"✅ Files with tables: {summary['files_with_matches']}")
 
         if results['error_files'] > 0:
             print(f"❌ Files with errors: {results['error_files']}")
 
         print(f"\n📈 Data Statistics:")
-        print(f"   Total rows: {results['total_rows']:,}")
-        print(f"   Matching tables: {results['matching_tables']}")
+        print(f"   Tables scanned: {results['total_tables_scanned']}")
+
+        if required_columns:
+            print(f"   Matching tables: {results['matching_tables']} ({summary['match_rate']:.1f}%)")
+            print(f"   Rows in matching tables: {results['total_rows']:,}")
+            print(f"   Rows in all tables: {summary['total_rows_all_tables']:,}")
+        else:
+            print(f"   Total tables: {results['matching_tables']}")
+            print(f"   Total rows: {results['total_rows']:,}")
 
         total_size_mb = summary['total_size_bytes'] / (1024 * 1024)
-        print(f"   Total size: {total_size_mb:.2f} MB")
+        print(f"   Total database size: {total_size_mb:.2f} MB")
 
         if summary['elapsed_time'] > 0:
             print(f"   Processing speed: {summary['rows_per_second']:.0f} rows/sec")
@@ -1204,18 +1253,20 @@ class SQLiteHandler(BaseDBHandler):
 
     @classmethod
     def analyze_scan_results(cls, results: Dict[str, Any],
-                            top_n: int = 10,
-                            sort_by: str = 'rows') -> None:
+                             top_n: int = 10,
+                             sort_by: str = 'rows',
+                             show_unmatched: bool = False) -> None:
         """
         Analyze and display detailed scan results.
 
         Args:
             results: Results from scan_databases
             top_n: Number of top files to show
-            sort_by: Sort criterion ('rows', 'tables', 'size')
+            sort_by: Sort criterion ('rows', 'tables', 'size', 'match_rate')
+            show_unmatched: Whether to show unmatched tables (default: False)
         """
         if not results['details']:
-            print("No matching data found to analyze.")
+            print("No data found to analyze.")
             return
 
         print(f"\n📋 Top {top_n} Files by {sort_by}")
@@ -1240,6 +1291,13 @@ class SQLiteHandler(BaseDBHandler):
                 key=lambda x: x['file_size'],
                 reverse=True
             )
+        elif sort_by == 'match_rate':
+            sorted_files = sorted(
+                results['details'],
+                key=lambda x: (x['file_matching_tables'] / x['file_total_tables'] * 100)
+                if x['file_total_tables'] > 0 else 0,
+                reverse=True
+            )
         else:
             sorted_files = results['details']
 
@@ -1248,18 +1306,33 @@ class SQLiteHandler(BaseDBHandler):
             print(f"\n{i}. {file_info['file_name']}")
             print(f"   📂 Path: {file_info['file']}")
             print(f"   💾 Size: {file_info['file_size'] / 1024:.1f} KB")
-            print(f"   📊 Total rows: {file_info['file_total_rows']:,}")
-            print(f"   📋 Matching tables: {len(file_info['tables'])}")
+            print(f"   📊 Rows (matching/all): {file_info['file_total_rows']:,} / {file_info['file_total_rows_all']:,}")
+            print(f"   📋 Tables (matching/all): {file_info['file_matching_tables']} / {file_info['file_total_tables']}")
+
+            if file_info['file_total_tables'] > 0:
+                match_rate = (file_info['file_matching_tables'] / file_info['file_total_tables']) * 100
+                print(f"   📈 Match rate: {match_rate:.1f}%")
 
             # Show table details
             for table_info in file_info['tables']:
+                # Skip unmatched tables unless requested
+                if not show_unmatched and not table_info['column_matched']:
+                    continue
+
                 accuracy_marker = ""
                 if table_info['schema_accuracy'] == 'low':
                     accuracy_marker = " ⚠️"
                 elif table_info['schema_accuracy'] == 'medium':
                     accuracy_marker = " ⚡"
 
-                print(f"      └─ {table_info['table']}: {table_info['rows']:,} rows{accuracy_marker}")
+                match_marker = "✓" if table_info['column_matched'] else "✗"
+                print(f"      └─ [{match_marker}] {table_info['table']}: {table_info['rows']:,} rows{accuracy_marker}")
+
+            # Show count of unmatched tables if not displaying them
+            if not show_unmatched:
+                unmatched_count = sum(1 for t in file_info['tables'] if not t['column_matched'])
+                if unmatched_count > 0:
+                    print(f"      └─ ... and {unmatched_count} unmatched table(s)")
 
     @classmethod
     def export_scan_results(cls, results: Dict[str, Any],
