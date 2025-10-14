@@ -268,10 +268,19 @@ class PostgreSQLHandler(BaseDBHandler):
             params: Query parameters (not used in current implementation)
 
         Returns:
-            List of query results
+            List of query results for SELECT queries, empty list for DDL/DML
         """
         with self.engine.connect() as conn:
-            return conn.execute(self._text(query)).fetchall()
+            result = conn.execute(self._text(query))
+
+            # Check if the query returns rows (SELECT queries)
+            if result.returns_rows:
+                return result.fetchall()
+            else:
+                # For DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE)
+                # Commit the transaction and return empty list
+                conn.commit()
+                return []
 
     def get_database_list(self, print_result: bool = False) -> List[str]:
         """
@@ -384,7 +393,7 @@ class SQLiteHandler(BaseDBHandler):
             params: Query parameters for safe execution
 
         Returns:
-            List of query results
+            List of query results for SELECT queries, empty list for DDL/DML
         """
         cursor = self.connection.cursor()
         if params:
@@ -392,12 +401,23 @@ class SQLiteHandler(BaseDBHandler):
         else:
             cursor.execute(query)
 
-        # For SELECT queries, fetch results
-        if query.strip().upper().startswith('SELECT'):
+        # Query type detection
+        query_upper = query.strip().upper()
+
+        # Check if query returns data (SELECT, WITH, PRAGMA table_info, etc.)
+        if (query_upper.startswith(('SELECT', 'WITH', 'PRAGMA')) and
+                'PRAGMA' in query_upper and 'table_info' in query.lower()):
+            # PRAGMA table_info returns results
+            return cursor.fetchall()
+        elif query_upper.startswith(('SELECT', 'WITH', 'VALUES', 'RETURNING')):
+            # Standard SELECT queries and CTEs
             return cursor.fetchall()
         else:
-            # For INSERT/UPDATE/DELETE, commit and return empty list
+            # DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE)
             self.connection.commit()
+            # Return rowcount for DML operations, empty list for DDL
+            if query_upper.startswith(('INSERT', 'UPDATE', 'DELETE')):
+                return []  # Could return [cursor.rowcount] if row count is needed
             return []
 
     def get_tables(self) -> List[str]:
@@ -1156,16 +1176,16 @@ class SQLiteHandler(BaseDBHandler):
     def _format_time(cls, seconds: float) -> str:
         """Format seconds into human-readable time string."""
         if seconds < 60:
-            return f"{seconds:.1f}초"
+            return f"{seconds:.1f}s"
         elif seconds < 3600:
             minutes = int(seconds // 60)
             secs = int(seconds % 60)
-            return f"{minutes}분 {secs}초"
+            return f"{minutes}m {secs}s"
         else:
             hours = int(seconds // 3600)
             minutes = int((seconds % 3600) // 60)
             secs = int(seconds % 60)
-            return f"{hours}시간 {minutes}분 {secs}초"
+            return f"{hours}h {minutes}m {secs}s"
 
     @classmethod
     def _display_scan_summary(cls, results: Dict[str, Any],
