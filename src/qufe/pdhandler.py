@@ -90,7 +90,7 @@ class PandasHandler:
         print()
         print("✓ Dependencies: INSTALLED")
         print()
-        
+
         print("AVAILABLE METHODS:")
         print("  • convert_list_to_tuple_in_df(): Convert list values to tuples in DataFrame")
         print("  • show_col_names(): Compare column names across multiple DataFrames")
@@ -125,7 +125,7 @@ class PandasHandler:
         print("  ")
         print("  # Cumulative balance calculation")
         print("  result = handler.calculate_cumulative_balance(")
-        print("      df, 'initial_stock', 'receipts', 'issues', 'new_period'")
+        print("      df, 'initial', 'inflow', 'outflow', 'new_segment'")
         print("  )")
 
     def convert_list_to_tuple_in_df(self, df) -> object:
@@ -567,7 +567,7 @@ class PandasHandler:
 
         Computes running balance where each segment (marked by a flag column) starts
         with an initial value and accumulates inflows minus outflows. This is commonly
-        used for inventory tracking, account balances, or any cumulative flow calculation.
+        used for tracking any cumulative flow with periodic resets.
 
         The calculation follows these rules:
         - When segment marker is 1: balance = initial + inflow - outflow
@@ -605,38 +605,38 @@ class PandasHandler:
 
         Example:
             >>> handler = PandasHandler()
-            >>> # Simple inventory tracking
+            >>> # Simple cumulative flow tracking
             >>> data = pd.DataFrame({
-            ...     'initial_stock': [100, 0, 0, 150, 0],
-            ...     'receipts': [10, 20, 15, 10, 25],
-            ...     'issues': [5, 30, 10, 20, 15],
-            ...     'new_period': [1, 0, 0, 1, 0]
+            ...     'initial': [100, 0, 0, 150, 0],
+            ...     'inflow': [10, 20, 15, 10, 25],
+            ...     'outflow': [5, 30, 10, 20, 15],
+            ...     'new_segment': [1, 0, 0, 1, 0]
             ... })
             >>> result = handler.calculate_cumulative_balance(
             ...     data,
-            ...     initial_col='initial_stock',
-            ...     inflow_col='receipts',
-            ...     outflow_col='issues',
-            ...     segment_marker_col='new_period'
+            ...     initial_col='initial',
+            ...     inflow_col='inflow',
+            ...     outflow_col='outflow',
+            ...     segment_marker_col='new_segment'
             ... )
             >>> print(result[['balance']])
 
-            >>> # Multi-product inventory with groups
+            >>> # Multi-entity tracking with groups
             >>> data = pd.DataFrame({
-            ...     'product': ['A', 'A', 'A', 'B', 'B', 'B'],
-            ...     'week': [1, 2, 3, 1, 2, 3],
-            ...     'opening_stock': [100, 0, 0, 200, 0, 0],
-            ...     'purchases': [50, 30, 40, 60, 70, 80],
-            ...     'sales': [20, 45, 35, 50, 65, 75],
-            ...     'week_start': [1, 0, 0, 1, 0, 0]
+            ...     'entity': ['A', 'A', 'A', 'B', 'B', 'B'],
+            ...     'period': [1, 2, 3, 1, 2, 3],
+            ...     'initial': [100, 0, 0, 200, 0, 0],
+            ...     'additions': [50, 30, 40, 60, 70, 80],
+            ...     'deductions': [20, 45, 35, 50, 65, 75],
+            ...     'period_start': [1, 0, 0, 1, 0, 0]
             ... })
             >>> result = handler.calculate_cumulative_balance(
             ...     data,
-            ...     initial_col='opening_stock',
-            ...     inflow_col='purchases',
-            ...     outflow_col='sales',
-            ...     segment_marker_col='week_start',
-            ...     group_cols='product'
+            ...     initial_col='initial',
+            ...     inflow_col='additions',
+            ...     outflow_col='deductions',
+            ...     segment_marker_col='period_start',
+            ...     group_cols='entity'
             ... )
 
         Algorithm Details:
