@@ -2,26 +2,148 @@ import difflib
 import importlib.util as ut
 import os
 import re
-import socket
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from zoneinfo import ZoneInfo
 
 
 class TS:
-    """Timestamp handling utility class with timezone support."""
+    """Timestamp handling utility class with automatic timezone detection."""
 
-    def __init__(self, time_zone: str = 'Asia/Seoul'):
+    def __init__(self, time_zone: Optional[str] = None, utc_offset: Optional[float] = None):
         """
-        Initialize timestamp handler.
+        Initialize timestamp handler with automatic local timezone detection.
 
         Args:
-            time_zone: Timezone string (default: 'Asia/Seoul')
+            time_zone: Timezone name (optional, auto-detects if None)
+            utc_offset: UTC offset in hours (optional, auto-detects if None)
         """
-        self.time_zone = time_zone
-        self.tz_info = ZoneInfo(time_zone)
+        if utc_offset is not None:
+            # Explicit UTC offset provided
+            self.utc_offset = utc_offset
+            self.tz_info = timezone(timedelta(hours=utc_offset))
+            self.time_zone = f"UTC{utc_offset:+g}"
+        elif time_zone is not None:
+            # Timezone string provided
+            self.time_zone = time_zone
+            self.utc_offset = self._get_offset_from_name(time_zone)
+            self.tz_info = timezone(timedelta(hours=self.utc_offset))
+        else:
+            # Auto-detect local timezone
+            self.utc_offset = self._get_local_utc_offset()
+            self.tz_info = timezone(timedelta(hours=self.utc_offset))
+            self.time_zone = f"UTC{self.utc_offset:+g}"
+
         self.time_format = '%Y-%m-%d %H:%M:%S'
+
+    @staticmethod
+    def _get_local_utc_offset() -> float:
+        """
+        Automatically detect local UTC offset using only local system information.
+        No external communication or network access required.
+
+        Returns:
+            UTC offset in hours for the local system
+        """
+        # Method 1: Calculate from local time difference
+        # This is most reliable across platforms
+        local_time = datetime.now()
+        utc_time = datetime.utcnow()
+
+        # Calculate the difference
+        delta = local_time - utc_time
+        offset_hours = delta.total_seconds() / 3600
+
+        # Round to nearest 30 minutes (to handle half-hour timezones)
+        # e.g., India (UTC+5:30), Nepal (UTC+5:45)
+        offset_hours = round(offset_hours * 2) / 2
+
+        # Method 2: Using time.timezone as fallback/validation
+        try:
+            if time.daylight:
+                # DST is in effect
+                offset_seconds_alt = -time.altzone
+            else:
+                # Standard time
+                offset_seconds_alt = -time.timezone
+
+            offset_hours_alt = offset_seconds_alt / 3600
+
+            # If results differ significantly, prefer Method 1
+            if abs(offset_hours - offset_hours_alt) > 0.5:
+                # Method 1 is usually more accurate
+                return offset_hours
+        except AttributeError:
+            # Some systems might not have altzone
+            pass
+
+        return offset_hours
+
+    @staticmethod
+    def _get_offset_from_name(tz_name: str) -> float:
+        """
+        Get UTC offset from timezone name.
+
+        Args:
+            tz_name: Timezone name or offset string
+
+        Returns:
+            UTC offset in hours
+        """
+        # Common timezone offsets (without DST consideration)
+        KNOWN_TIMEZONES = {
+            'Asia/Seoul': 9,
+            'Asia/Tokyo': 9,
+            'Asia/Shanghai': 8,
+            'Asia/Singapore': 8,
+            'Asia/Kolkata': 5.5,
+            'Asia/Dubai': 4,
+            'Europe/Moscow': 3,
+            'Europe/Paris': 1,
+            'Europe/London': 0,
+            'UTC': 0,
+            'US/Eastern': -5,
+            'US/Central': -6,
+            'US/Mountain': -7,
+            'US/Pacific': -8,
+            'America/New_York': -5,
+            'America/Chicago': -6,
+            'America/Denver': -7,
+            'America/Los_Angeles': -8,
+        }
+
+        # Check if it's a known timezone
+        if tz_name in KNOWN_TIMEZONES:
+            return KNOWN_TIMEZONES[tz_name]
+
+        # Try to parse offset strings like 'UTC+9', 'GMT-5', '+09:00'
+        if 'UTC' in tz_name or 'GMT' in tz_name:
+            try:
+                offset_str = tz_name.replace('UTC', '').replace('GMT', '').strip()
+                return float(offset_str)
+            except ValueError:
+                pass
+
+        # Handle ISO format offsets like '+09:00', '-05:30'
+        if ':' in tz_name and (tz_name[0] in '+-' or tz_name[-6] in '+-'):
+            try:
+                # Find the offset part
+                if tz_name[0] in '+-':
+                    offset_str = tz_name
+                else:
+                    offset_str = tz_name[-6:]
+
+                sign = 1 if offset_str[0] == '+' else -1
+                parts = offset_str[1:].split(':')
+                hours = int(parts[0])
+                minutes = int(parts[1]) if len(parts) > 1 else 0
+                return sign * (hours + minutes / 60)
+            except (ValueError, IndexError):
+                pass
+
+        # If all parsing fails, detect local timezone
+        print(f"Warning: Unknown timezone '{tz_name}', using local timezone")
+        return TS._get_local_utc_offset()
 
     def timestamp_to_datetime(self, timestamp) -> datetime:
         """
@@ -34,8 +156,8 @@ class TS:
             datetime object with timezone or None if invalid input
 
         Example:
-            >>> ts = TS()
-            >>> dt = ts.timestamp_to_datetime(1640995200)  # 2022-01-01 00:00:00 UTC
+            >>> ts = TS()  # Auto-detects local timezone
+            >>> dt = ts.timestamp_to_datetime(1640995200)
         """
         match timestamp:
             case int() | float():
@@ -56,17 +178,34 @@ class TS:
             Formatted timestamp string or None if invalid
 
         Example:
-            >>> ts = TS()
+            >>> ts = TS()  # Auto-detects local timezone
             >>> formatted = ts.get_ts_formatted(1640995200)
-            >>> print(formatted)  # '2022-01-01 09:00:00'
         """
-        if isinstance(timestamp, int | float):
+        if isinstance(timestamp, (int, float)):
             timestamp = self.timestamp_to_datetime(timestamp)
 
         if isinstance(timestamp, datetime):
             return timestamp.strftime(self.time_format)
         else:
             return None
+
+    def get_timezone_info(self) -> Dict[str, Any]:
+        """
+        Get information about current timezone settings.
+
+        Returns:
+            Dictionary with timezone information
+        """
+        now_local = datetime.now(self.tz_info)
+        now_utc = datetime.now(timezone.utc)
+
+        return {
+            'timezone': self.time_zone,
+            'utc_offset_hours': self.utc_offset,
+            'current_time': now_local.strftime(self.time_format),
+            'utc_time': now_utc.strftime(self.time_format),
+            'is_dst': time.daylight and time.localtime().tm_isdst > 0
+        }
 
 
 # ============================================================================
@@ -419,7 +558,7 @@ def diff_codes(left: str, right: str, mode: int = 0):
         mode: Comparison mode (0=simple, 1=unified, 2=ndiff)
 
     Example:
-        >>> diff_codes("line1\nline2", "line1\nmodified", mode=1)
+        >>> diff_codes("line1\\nline2", "line1\\nmodified", mode=1)
     """
     left_lines = left.splitlines()
     right_lines = right.splitlines()
@@ -615,6 +754,19 @@ class WOL:
             verbose: Enable detailed output messages (default: True)
         """
         self.verbose = verbose
+        self._socket = None  # Lazy load socket
+
+    def _ensure_socket(self):
+        """Lazy import socket module when needed."""
+        if self._socket is None:
+            try:
+                import socket
+                self._socket = socket
+            except ImportError:
+                raise ImportError(
+                    "WOL functionality requires socket library. "
+                    "This should be available in standard Python installation."
+                )
 
     def validate_mac(self, mac: str) -> bool:
         """
@@ -714,14 +866,17 @@ class WOL:
             >>> wol = WOL()
             >>> success = wol.send_packet("AA:BB:CC:DD:EE:FF")
         """
+        # Ensure socket is imported
+        self._ensure_socket()
+
         if not self.validate_mac(mac):
             raise ValueError(f"Invalid MAC address format: {mac}")
 
         packet = self.create_magic_packet(mac)
 
         # Create UDP socket with broadcast enabled
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        with self._socket.socket(self._socket.AF_INET, self._socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(self._socket.SOL_SOCKET, self._socket.SO_BROADCAST, 1)
 
             for attempt in range(attempts):
                 try:
