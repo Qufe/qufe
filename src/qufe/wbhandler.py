@@ -19,6 +19,7 @@ import os
 import sys
 import json
 import time
+import shutil
 from urllib.parse import urlparse, parse_qs
 from typing import List, Dict, Any, Optional, Union
 
@@ -104,6 +105,7 @@ def help():
     print()
 
     print("FEATURES:")
+    print("  • Cross-platform support (x86, x64, ARM including Raspberry Pi)")
     print("  • Gradual element finding with automatic fallback")
     print("  • Network request monitoring via JavaScript injection")
     print("  • Interactive element discovery and automation")
@@ -135,6 +137,15 @@ def help():
     print("  • browser.open(url, safe_timeout=True)  # Shorter timeout")
     print("  • browser.open(url, timeout=15)  # Custom timeout")
     print("  • browser.wait_for_network_idle()  # Wait for network activity to settle")
+    print()
+
+    print("PLATFORM SUPPORT:")
+    print("  • ARM systems (Raspberry Pi, Apple Silicon): Automatic driver detection")
+    print("  • x86/x64 systems: Selenium Manager with fallback support")
+    print("  • WebDriver installation:")
+    print("    - Raspberry Pi: sudo apt install firefox-geckodriver")
+    print("    - Ubuntu/Debian: sudo apt install firefox-geckodriver chromium-driver")
+    print("    - macOS: brew install geckodriver chromedriver")
     print()
 
     print("USAGE EXAMPLE:")
@@ -975,18 +986,74 @@ class Chrome(Browser):
         super().__init__(private_mode, mobile_mode, headless, window_size, window_position)
 
     def _init_webdriver(self) -> None:
-        """Initialize Chrome webdriver with custom options."""
+        """
+        Initialize Chrome webdriver with cross-platform support.
+
+        Attempts multiple initialization methods to ensure compatibility across
+        different platforms including ARM (Raspberry Pi) and x86/x64 systems.
+        """
         self.options = self.selenium['ChromeOptions']()
         self._setup_default_options()
 
-        # Initialize driver
-        try:
-            self.driver = self.selenium['webdriver'].Chrome(options=self.options)
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to initialize Chrome driver: {e}\n"
-                "Make sure ChromeDriver is installed and in PATH"
-            )
+        driver_initialized = False
+        initialization_errors = []
+
+        # Method 1: Try with explicit chromedriver path (best for ARM/non-standard systems)
+        chromedriver_path = shutil.which('chromedriver')
+        if chromedriver_path:
+            try:
+                service = self.selenium['ChromeService'](executable_path=chromedriver_path)
+                self.driver = self.selenium['webdriver'].Chrome(service=service, options=self.options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print(f"Chrome initialized with explicit driver path: {chromedriver_path}")
+            except Exception as e:
+                initialization_errors.append(f"Service with path ({chromedriver_path}): {str(e)[:100]}")
+
+        # Method 2: Let Selenium Manager handle it (best for standard x86/x64)
+        if not driver_initialized:
+            try:
+                self.driver = self.selenium['webdriver'].Chrome(options=self.options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print("Chrome initialized with Selenium Manager")
+            except Exception as e:
+                initialization_errors.append(f"Selenium Manager: {str(e)[:100]}")
+
+        # Method 3: Try with Service but no explicit path (compatibility fallback)
+        if not driver_initialized:
+            try:
+                service = self.selenium['ChromeService']()
+                self.driver = self.selenium['webdriver'].Chrome(service=service, options=self.options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print("Chrome initialized with Service (no explicit path)")
+            except Exception as e:
+                initialization_errors.append(f"Service without path: {str(e)[:100]}")
+
+        if not driver_initialized:
+            error_msg = "Failed to initialize Chrome driver.\n"
+            error_msg += "\nAttempted methods:\n"
+            for i, err in enumerate(initialization_errors, 1):
+                error_msg += f"  {i}. {err}\n"
+            error_msg += "\n" + "=" * 50 + "\n"
+            error_msg += "TROUBLESHOOTING:\n"
+            error_msg += "1. Install Chrome/Chromium:\n"
+            error_msg += "   - Ubuntu/Raspberry Pi: sudo apt install chromium-browser\n"
+            error_msg += "   - macOS: brew install --cask google-chrome\n"
+            error_msg += "   - Windows: Download from https://www.google.com/chrome/\n\n"
+            error_msg += "2. Install ChromeDriver:\n"
+            error_msg += "   - Ubuntu/Raspberry Pi: sudo apt install chromium-driver\n"
+            error_msg += "   - macOS: brew install chromedriver\n"
+            error_msg += "   - Windows: Download from https://chromedriver.chromium.org/\n\n"
+            error_msg += "3. Verify installation:\n"
+            error_msg += "   - Check Chrome: chromium-browser --version (or google-chrome --version)\n"
+            error_msg += "   - Check driver: chromedriver --version\n"
+            error_msg += "   - Check PATH: which chromedriver\n\n"
+            error_msg += "4. For ARM systems (Raspberry Pi, Apple Silicon):\n"
+            error_msg += "   Ensure you have the ARM-compatible version of chromedriver\n"
+            error_msg += "=" * 50
+            raise RuntimeError(error_msg)
 
     def _setup_default_options(self) -> None:
         """Setup safe default Chrome options."""
@@ -1075,11 +1142,14 @@ class Chrome(Browser):
 
 
 class Firefox(Browser):
-    """Firefox browser implementation with profile management and private browsing."""
+    """Firefox browser implementation with profile management and enhanced ARM support."""
 
     def _init_webdriver(self) -> None:
         """
-        Initialize Firefox webdriver with profile detection and private browsing.
+        Initialize Firefox webdriver with cross-platform support.
+
+        Attempts multiple initialization methods to ensure compatibility across
+        different platforms including ARM (Raspberry Pi) and x86/x64 systems.
         """
         options = self.selenium['FirefoxOptions']()
 
@@ -1108,23 +1178,81 @@ class Firefox(Browser):
             mobile_user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
             options.set_preference("general.useragent.override", mobile_user_agent)
 
-        # Initialize driver
-        try:
-            self.driver = self.selenium['webdriver'].Firefox(options=options)
+        # Initialize driver with multiple fallback methods
+        driver_initialized = False
+        initialization_errors = []
 
-            # Set window size and position after initialization
-            if not self._mobile_mode:
-                width, height = map(int, self._window_size.split(','))
-                x, y = map(int, self._window_position.split(','))
+        # Method 1: Try with explicit geckodriver path (best for ARM/non-standard systems)
+        geckodriver_path = shutil.which('geckodriver')
+        if geckodriver_path:
+            try:
+                service = self.selenium['FirefoxService'](executable_path=geckodriver_path)
+                self.driver = self.selenium['webdriver'].Firefox(service=service, options=options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print(f"Firefox initialized with explicit driver path: {geckodriver_path}")
+            except Exception as e:
+                initialization_errors.append(f"Service with path ({geckodriver_path}): {str(e)[:100]}")
 
-                self.driver.set_window_size(width, height)
-                self.driver.set_window_position(x, y)
+        # Method 2: Let Selenium Manager handle it (best for standard x86/x64)
+        if not driver_initialized:
+            try:
+                self.driver = self.selenium['webdriver'].Firefox(options=options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print("Firefox initialized with Selenium Manager")
+            except Exception as e:
+                initialization_errors.append(f"Selenium Manager: {str(e)[:100]}")
 
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to initialize Firefox driver: {e}\n"
-                "Make sure GeckoDriver is installed and in PATH"
-            )
+        # Method 3: Try with Service but no explicit path (compatibility fallback)
+        if not driver_initialized:
+            try:
+                service = self.selenium['FirefoxService']()
+                self.driver = self.selenium['webdriver'].Firefox(service=service, options=options)
+                driver_initialized = True
+                if os.environ.get('QUFE_DEBUG'):
+                    print("Firefox initialized with Service (no explicit path)")
+            except Exception as e:
+                initialization_errors.append(f"Service without path: {str(e)[:100]}")
+
+        if not driver_initialized:
+            error_msg = "Failed to initialize Firefox driver.\n"
+            error_msg += "\nAttempted methods:\n"
+            for i, err in enumerate(initialization_errors, 1):
+                error_msg += f"  {i}. {err}\n"
+            error_msg += "\n" + "=" * 50 + "\n"
+            error_msg += "TROUBLESHOOTING:\n"
+            error_msg += "1. Install Firefox:\n"
+            error_msg += "   - Ubuntu/Raspberry Pi: sudo apt install firefox\n"
+            error_msg += "   - macOS: brew install --cask firefox\n"
+            error_msg += "   - Windows: Download from https://www.mozilla.org/firefox/\n\n"
+            error_msg += "2. Install GeckoDriver:\n"
+            error_msg += "   - Ubuntu/Raspberry Pi: sudo apt install firefox-geckodriver\n"
+            error_msg += "   - macOS: brew install geckodriver\n"
+            error_msg += "   - Windows: Download from https://github.com/mozilla/geckodriver/releases\n\n"
+            error_msg += "3. Verify installation:\n"
+            error_msg += "   - Check Firefox: firefox --version\n"
+            error_msg += "   - Check driver: geckodriver --version\n"
+            error_msg += "   - Check PATH: which geckodriver\n\n"
+            error_msg += "4. For ARM systems (Raspberry Pi, Apple Silicon):\n"
+            error_msg += "   Ensure you have the ARM-compatible version of geckodriver\n"
+            error_msg += "   On Raspberry Pi: sudo apt update && sudo apt install firefox-geckodriver\n"
+            error_msg += "=" * 50
+            raise RuntimeError(error_msg)
+
+        # Set window size and position after successful initialization
+        if driver_initialized:
+            try:
+                if not self._mobile_mode:
+                    width, height = map(int, self._window_size.split(','))
+                    x, y = map(int, self._window_position.split(','))
+
+                    self.driver.set_window_size(width, height)
+                    self.driver.set_window_position(x, y)
+            except Exception as e:
+                # Non-critical error, just log if debug mode
+                if os.environ.get('QUFE_DEBUG'):
+                    print(f"Warning: Could not set window size/position: {e}")
 
     @staticmethod
     def _find_firefox_profile() -> Optional[str]:
@@ -1157,8 +1285,11 @@ class Firefox(Browser):
 
 # Example usage demonstrating the enhanced functionality
 if __name__ == '__main__':
-    print("qufe.wbhandler Example Usage with Improved Implementation")
+    print("qufe.wbhandler Example Usage with Cross-Platform Support")
     print("=" * 60)
+
+    # Optional: Enable debug output for driver initialization
+    # os.environ['QUFE_DEBUG'] = '1'
 
     # Example with Chrome and method chaining
     chrome = Chrome()
@@ -1235,3 +1366,14 @@ if __name__ == '__main__':
         print("Cleaning up...")
         chrome.quit()
         print("Session ended")
+
+    # Optional: Quick Firefox test to verify ARM compatibility
+    print("\n" + "=" * 60)
+    print("Quick Firefox compatibility test (optional)...")
+    try:
+        firefox = Firefox(headless=True)
+        firefox.open("https://httpbin.org/get", safe_timeout=True)
+        print("✓ Firefox works on this platform")
+        firefox.quit()
+    except Exception as e:
+        print(f"⚠ Firefox not available or configured: {str(e)[:100]}")
