@@ -8,6 +8,7 @@ This module provides utilities for:
 - Data quality validation and exploration
 - Integer allocation using mathematical methods
 - Value rebalancing to eliminate negative values
+- Proportional integer distribution across groups
 
 Required dependencies:
     pip install qufe[data]
@@ -100,6 +101,8 @@ class PandasHandler:
         print("  • allocate_integer_remainder(): Allocate fractional values as integers")
         print("  • rebalance_negative_values(): Redistribute to eliminate negative values")
         print("  • calculate_cumulative_balance(): Calculate running balance with segment resets")
+        print("  • allocate_integer_proportional(): Distribute integers proportionally by weight")
+        print("  • verify_proportional_allocation(): Verify proportional allocation results")
         print()
 
         print("USAGE EXAMPLES:")
@@ -126,6 +129,11 @@ class PandasHandler:
         print("  # Cumulative balance calculation")
         print("  result = handler.calculate_cumulative_balance(")
         print("      df, 'initial', 'inflow', 'outflow', 'new_segment'")
+        print("  )")
+        print("  ")
+        print("  # Proportional integer distribution")
+        print("  result = handler.allocate_integer_proportional(")
+        print("      df, 'group', 'total', 'weight', 'allocated'")
         print("  )")
 
     def convert_list_to_tuple_in_df(self, df) -> object:
@@ -757,3 +765,222 @@ class PandasHandler:
             df = df.drop(columns=existing_cols)
 
         return df
+
+    def allocate_integer_proportional(
+            self,
+            df,
+            group_cols: Union[str, List[str]],
+            total_col: str,
+            weight_col: str,
+            result_col: str = 'allocated',
+            keep_intermediate: bool = False,
+            int_dtype: str = 'int64'
+    ) -> object:
+        """
+        Distribute group totals as integers proportional to weights using Hamilton's Method.
+
+        Each group distributes its total value (assumed identical across rows in the group)
+        as integers proportional to weight values, ensuring the sum of allocated integers
+        equals the group total exactly.
+
+        This method implements Hamilton's Method (Largest Remainder Method), which:
+        1. Calculates proportional float values based on weights
+        2. Takes floor of each value as base allocation
+        3. Distributes remaining units to items with largest fractional remainders
+
+        Args:
+            df: Input DataFrame containing groups, totals, and weights
+            group_cols: Column(s) defining groups for distribution (str or list of str)
+            total_col: Column containing group total (must be identical within each group)
+            weight_col: Column containing positive weights for proportional distribution
+            result_col: Name for the result column containing integer allocations.
+                       Defaults to 'allocated'.
+            keep_intermediate: If True, keep intermediate calculation columns for debugging
+                             (_raw, _base, _remainder, _rank_in_group, _remaining, _increment).
+                             Defaults to False.
+            int_dtype: Integer dtype for result column ('int64' or 'int32').
+                      Use 'int32' for memory savings when total values are below 2^31.
+                      Defaults to 'int64'.
+
+        Returns:
+            DataFrame with proportional integer allocations in the result column
+
+        Raises:
+            TypeError: If input is not a pandas DataFrame
+            KeyError: If specified columns don't exist in DataFrame
+
+        Notes:
+            - Assumes total_col values are identical within each group
+            - Assumes weight_col contains positive values (or at least group sum > 0)
+            - Uses Hamilton's Method for fair integer distribution
+            - Result sum per group equals total_col value exactly
+
+        Example:
+            >>> handler = PandasHandler()
+            >>> # Single group column
+            >>> data = pd.DataFrame({
+            ...     'group': ['A', 'A', 'A', 'B', 'B'],
+            ...     'total': [100, 100, 100, 50, 50],
+            ...     'weight': [30, 50, 20, 40, 60]
+            ... })
+            >>> result = handler.allocate_integer_proportional(
+            ...     data, 'group', 'total', 'weight'
+            ... )
+            >>> print(result[['group', 'total', 'weight', 'allocated']])
+            >>> # Verify sum per group equals total
+            >>> print(result.groupby('group')['allocated'].sum())
+
+            >>> # Multiple group columns
+            >>> data = pd.DataFrame({
+            ...     'region': ['East', 'East', 'West', 'West'],
+            ...     'category': ['A', 'B', 'A', 'B'],
+            ...     'total': [100, 100, 50, 50],
+            ...     'weight': [60, 40, 30, 70]
+            ... })
+            >>> result = handler.allocate_integer_proportional(
+            ...     data, ['region', 'category'], 'total', 'weight'
+            ... )
+        """
+        self._validate_dataframe(df)
+
+        # Input validation
+        df = df.copy()
+        if isinstance(group_cols, str):
+            group_cols = [group_cols]
+
+        # Check if columns exist
+        required_cols = group_cols + [total_col, weight_col]
+        missing_cols = set(required_cols) - set(df.columns)
+        if missing_cols:
+            raise KeyError(f"Columns not found in DataFrame: {missing_cols}")
+
+        # Group operations
+        grp = df.groupby(group_cols, sort=False)
+
+        # Calculate group statistics
+        weight_sum = grp[weight_col].transform("sum")
+        total_per_row = grp[total_col].transform("first")
+
+        # Calculate proportional float values
+        raw = total_per_row * df[weight_col] / weight_sum
+
+        # Base allocation (floor)
+        base = self.np.floor(raw).astype(int_dtype)
+
+        # Fractional remainder
+        remainder = raw - base
+
+        # Calculate remaining units to distribute per group
+        base_sum = grp[weight_col].transform(lambda x: base[x.index].sum())
+        remaining = (total_per_row - base_sum).astype(int_dtype)
+
+        # Rank items by remainder within each group (largest remainder first)
+        df['_remainder'] = remainder
+        df['_group_id'] = grp.ngroup()
+
+        # Calculate rank within group using argsort for efficiency
+        df['_rank_in_group'] = (
+            grp['_remainder']
+            .transform(lambda x: self.pd.Series(self.np.argsort(-x.values), index=x.index))
+        )
+
+        # Distribute remaining units to top-ranked items
+        increment = (df['_rank_in_group'] < remaining).astype(int_dtype)
+
+        # Final allocation
+        df[result_col] = base + increment
+
+        # Optional: keep intermediate columns for debugging
+        if keep_intermediate:
+            df['_raw'] = raw
+            df['_base'] = base
+            df['_remaining'] = remaining
+            df['_increment'] = increment
+        else:
+            # Clean up intermediate columns
+            df = df.drop(columns=['_remainder', '_group_id', '_rank_in_group'])
+
+        return df
+
+    def verify_proportional_allocation(
+            self,
+            df,
+            group_cols: Union[str, List[str]],
+            total_col: str,
+            result_col: str
+    ) -> object:
+        """
+        Verify proportional allocation results.
+
+        Checks that the sum of allocated values per group equals the expected total
+        for each group. Useful for validating results from allocate_integer_proportional.
+
+        Args:
+            df: DataFrame containing allocation results
+            group_cols: Column(s) defining groups (str or list of str)
+            total_col: Column containing expected group totals
+            result_col: Column containing allocated values to verify
+
+        Returns:
+            DataFrame with verification results showing:
+            - Group identifier(s)
+            - Expected total (first value of total_col in group)
+            - Actual total (sum of result_col in group)
+            - Validity flag (True if expected == actual)
+
+        Raises:
+            TypeError: If input is not a pandas DataFrame
+            KeyError: If specified columns don't exist in DataFrame
+
+        Example:
+            >>> handler = PandasHandler()
+            >>> # Single group column
+            >>> result = handler.allocate_integer_proportional(
+            ...     df, 'group', 'total', 'weight'
+            ... )
+            >>> verification = handler.verify_proportional_allocation(
+            ...     result, 'group', 'total', 'allocated'
+            ... )
+            >>> # Check for any mismatches
+            >>> if not verification['is_valid'].all():
+            ...     print("Allocation errors found!")
+            ...     print(verification[~verification['is_valid']])
+
+            >>> # Multiple group columns
+            >>> result = handler.allocate_integer_proportional(
+            ...     df, ['region', 'category'], 'total', 'weight'
+            ... )
+            >>> verification = handler.verify_proportional_allocation(
+            ...     result, ['region', 'category'], 'total', 'allocated'
+            ... )
+        """
+        self._validate_dataframe(df)
+
+        # Input validation
+        if isinstance(group_cols, str):
+            group_cols = [group_cols]
+
+        # Check if columns exist
+        required_cols = group_cols + [total_col, result_col]
+        missing_cols = set(required_cols) - set(df.columns)
+        if missing_cols:
+            raise KeyError(f"Columns not found in DataFrame: {missing_cols}")
+
+        # Group and aggregate
+        verification = df.groupby(group_cols, sort=False).agg({
+            total_col: 'first',
+            result_col: 'sum'
+        }).reset_index()
+
+        # Rename aggregated columns
+        rename_dict = {
+            total_col: 'expected_total',
+            result_col: 'actual_total'
+        }
+        verification = verification.rename(columns=rename_dict)
+
+        verification['is_valid'] = (
+                verification['expected_total'] == verification['actual_total']
+        )
+
+        return verification
