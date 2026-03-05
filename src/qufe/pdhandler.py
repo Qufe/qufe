@@ -568,7 +568,8 @@ class PandasHandler:
             segment_marker_col: str,
             result_col: str = 'balance',
             group_cols: Optional[Union[str, List[str]]] = None,
-            keep_intermediate: bool = False
+            keep_intermediate: bool = False,
+            replace_initial_col: bool = True
     ) -> object:
         """
         Calculate cumulative balance with segment-based reinitialization.
@@ -596,6 +597,7 @@ class PandasHandler:
                        Can be string or list of strings. Defaults to None.
             keep_intermediate: If True, keep intermediate calculation columns.
                               Defaults to False.
+            replace_initial_col: If True, replace initial column with previous balance column.
 
         Returns:
             DataFrame with cumulative balance in the result column
@@ -734,6 +736,37 @@ class PandasHandler:
         # Calculate final balance: segment initial + cumulative delta
         df[result_col] = df['_segment_initial'] + df['_cumulative_delta']
 
+        # Calculate previous_balance: initial if segment_marker==1, else balance
+        if group_cols:
+            shifted_balance = df.groupby(group_cols)[result_col].shift(1)
+        else:
+            shifted_balance = df[result_col].shift(1)
+
+        previous_balance_col = f'previous_{result_col}'
+        df[previous_balance_col] = self.np.where(
+            df[segment_marker_col] == 1,
+            df[initial_col],
+            shifted_balance
+        )
+
+        # Validation: previous_balance + inflow - outflow == balance
+        df['_validation'] = df[previous_balance_col] + df[inflow_col] - df[outflow_col]
+
+        validation_mismatch = ~self.np.isclose(
+            df[result_col].fillna(0),
+            df['_validation'].fillna(0),
+            rtol=1e-9,
+            atol=1e-9
+        )
+
+        if validation_mismatch.any():
+            mismatch_count = validation_mismatch.sum()
+            raise ValueError(
+                f"Validation failed: {mismatch_count} rows have mismatch between "
+                f"calculated balance and validation formula "
+                f"({previous_balance_col} + {inflow_col} - {outflow_col} != {result_col})"
+            )
+
         # Handle edge case: if first row has no segment marker
         if group_cols:
             # Check each group's first row
@@ -763,6 +796,9 @@ class PandasHandler:
             ]
             existing_cols = [col for col in intermediate_cols if col in df.columns]
             df = df.drop(columns=existing_cols)
+
+        if replace_initial_col:
+            df = df.drop(columns=initial_col).rename(columns={previous_balance_col: initial_col})
 
         return df
 
