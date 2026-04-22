@@ -13,6 +13,7 @@ import os
 import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
+from urllib.parse import quote_plus
 from typing import List, Dict, Optional, Any, Union
 from contextlib import contextmanager
 import time
@@ -248,7 +249,8 @@ class PostgreSQLHandler(BaseDBHandler):
 
     def connect(self) -> None:
         """Establish PostgreSQL connection."""
-        url = f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+        password_encoded = quote_plus(self.password)
+        url = f"postgresql+psycopg2://{self.user}:{password_encoded}@{self.host}:{self.port}/{self.database}"
         self.engine = self._create_engine(url, echo=False, future=True)
         self.connection = self.engine
 
