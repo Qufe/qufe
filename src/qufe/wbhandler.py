@@ -671,6 +671,20 @@ class Browser:
         except self.selenium['WebDriverException']:
             return False
 
+    def is_current_handle_valid(self) -> bool:
+        """
+        Check if the current window handle is still alive.
+        Returns:
+            True if current handle exists in live handles, False otherwise
+        """
+        if not self.driver:
+            return False
+        try:
+            current = self.driver.current_window_handle
+            return current in self.driver.window_handles
+        except self.selenium['WebDriverException']:
+            return False
+
     def open_new_tab(self, url: Optional[str] = None, safe_timeout: bool = False) -> bool:
         """
         Open new tab and optionally navigate to URL.
@@ -685,6 +699,12 @@ class Browser:
         if not self.driver:
             return False
         try:
+            if not self.is_current_handle_valid():
+                live = self.get_all_handles()
+                if not live:
+                    return False
+                self.switch_to_window(live[-1])
+
             self.driver.switch_to.new_window('tab')
             new_handle = self.driver.current_window_handle
             self.window_handles.append(new_handle)
